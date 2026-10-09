@@ -1,0 +1,98 @@
+stages:
+  - prepare
+  - verify
+  - build
+  - release
+
+default:
+  image: golang:1.27-bookworm
+
+variables:
+  GIT_DEPTH: "0"
+  GOFLAGS: "-mod=readonly"
+  GOCACHE: "$CI_PROJECT_DIR/.tmp/go-build-cache"
+  GOMODCACHE: "$CI_PROJECT_DIR/.tmp/go/pkg/mod"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .tmp/go-build-cache/
+    - .tmp/go/pkg/mod/
+
+before_script:
+  - mkdir -p .tmp/go-build-cache .tmp/go/pkg/mod
+
+.release_rules:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+      changes:
+        - VERSION
+
+check:
+  stage: verify
+  script:
+    - for script in scripts/ci_*.sh; do bash -n "$script"; done
+    - test -z "$(gofmt -l *.go scripts/*.go third_party/go-pkcs12/*.go third_party/go-pkcs12/internal/rc2/*.go)"
+    - go build ./...
+    - go vet ./... software.sslmate.com/src/go-pkcs12
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+test:
+  stage: verify
+  before_script:
+    - mkdir -p .tmp/go-build-cache .tmp/go/pkg/mod
+    - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
+  script:
+    - go test ./... software.sslmate.com/src/go-pkcs12
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+release_notes:
+  extends: .release_rules
+  stage: prepare
+  script:
+    - bash scripts/ci_release_notes.sh
+  artifacts:
+    reports:
+      dotenv: dist/release.env
+    paths:
+      - dist/release_notes.md
+      - dist/CHANGELOG.generated.md
+    expire_in: 30 days
+
+release_binaries:
+  extends: .release_rules
+  stage: build
+  timeout: 1h
+  needs:
+    - job: check
+      artifacts: false
+    - job: test
+      artifacts: false
+    - job: release_notes
+      artifacts: true
+  script:
+    - bash scripts/ci_package_release.sh
+    - bash scripts/ci_upload_release_packages.sh
+  artifacts:
+    paths:
+      - dist/release_assets.txt
+    expire_in: 30 days
+
+publish_release:
+  extends: .release_rules
+  stage: release
+  resource_group: release
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
+  needs:
+    - job: release_notes
+      artifacts: true
+    - job: release_binaries
+      artifacts: true
+  script:
+    - bash scripts/ci_publish_release.sh

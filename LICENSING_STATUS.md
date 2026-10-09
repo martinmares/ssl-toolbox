@@ -19,11 +19,11 @@ Commercial support:   OMITTED per explicit user instruction
 Conflicts found:      None; dependency licenses retained
 ```
 
-No remote repository is configured yet; hosting settings have not been changed.
+A GitLab remote is configured. Hosting settings have not been changed by this tool.
 MANUAL ACTION REQUIRED: Disable GitHub Issues.
 Disable GitHub Discussions and protect main after creating the repository.
 Apply the corresponding controls on GitLab if that is the chosen host.
 
 The MIT text is unmodified. third_party/go-pkcs12/LICENSE and existing upstream
 copyright headers are retained. THIRD_PARTY_NOTICES.md supplies original license
-texts for binary distribution, covering all three Justfile release platforms.
+texts for binary distribution, covering Linux, macOS and Windows release platforms.

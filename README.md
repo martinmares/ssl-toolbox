@@ -65,8 +65,8 @@ just version         # contents of VERSION
 | `notices` | Refresh license notices for dependencies across all release targets |
 | `upgrade-modules` | Upgrade external Go modules, refresh checksums/notices, check and build locally |
 
-`VERSION` is the single default source of the version; the initial version is
-`1.0.0`. Before a release, edit this file, then run `just check` and
+`VERSION` is the single default source of the version; the current version is
+`1.0.1`. Before a release, edit this file, then run `just check` and
 `just build-all`. A plain `go build` also contains the version through
 `go:embed`. Just builds additionally inject the short Git commit and UTC build
 time through linker flags. Without Git or linker metadata, commit/build time
@@ -77,6 +77,51 @@ Release builds use `CGO_ENABLED=0`. `dist/` also contains `LICENSE`,
 when distributing binaries. `dist/` is ignored by Git. `upgrade-modules` retains
 the locally modified PKCS#12 library through `replace`; it does not automatically
 synchronize its source with upstream. Notices are refreshed after dependency upgrades.
+
+## GitLab Releases
+
+The project `.gitlab-ci.yml` follows the same release workflow as `oci-toolbox`:
+
+1. `release_notes` generates notes and metadata from `VERSION` and Git history.
+2. `check` and `test` verify compilation, formatting, `go vet` and tests for the application and local PKCS#12 library.
+3. `release_binaries` builds six `.tar.gz` archives: Linux, macOS and Windows, each for amd64 and arm64. Every archive includes the executable, both READMEs, `VERSION`, `LICENSE` and `THIRD_PARTY_NOTICES.md`. It also produces `SHA256SUMS`.
+4. Archives are uploaded to the GitLab Generic Package Registry and `publish_release` links them from GitLab Release `v<VERSION>`.
+
+Releases run when a push changes `VERSION` on the default branch, or manually
+through **Build → Pipelines → New pipeline** on that branch. Other default
+branch changes and merge requests run checks. `VERSION` contains a semantic
+version without a `v` prefix; publication can create the tag. Existing tags
+must reference the same commit, otherwise increment the version. Version
+`1.0.1` is prepared for the first release through this pipeline; the older
+`v1.0.0` references the initial commit.
+
+Build jobs use `golang:1.27-bookworm` and compile directly with Go. This pipeline
+has no Dockerfile, buildpack or deployment job. Local `just build-all` still
+builds three primary targets; the release script also adds Linux/Windows arm64
+and macOS amd64.
+
+Publication uses the standard `CI_JOB_TOKEN`; the project must allow Package
+Registry and Release publication. Only small metadata files travel between
+jobs as artifacts with a 30-day lifetime. Archives remain in the Package
+Registry and are downloadable from Releases. Retrying the same version at the
+same commit updates the existing Release and links. Checksum failures or tag
+commit mismatches stop publication.
+
+Optional `RELEASE_PUSH_TOKEN` with repository write permission enables committing
+the generated `CHANGELOG.md` back to the branch with `[skip ci]`. Without it,
+notes stay attached to the Release and the repository is not modified.
+
+Local preparation without uploading:
+
+```sh
+bash scripts/ci_release_notes.sh
+bash scripts/ci_package_release.sh
+(cd dist/release && shasum -a 256 -c SHA256SUMS)
+```
+
+The Go module path is `github.com/martinmares/ssl-toolbox`. GitLab builds the
+local checkout, so this path does not require access to the GitHub repository.
+Publication uses the current GitLab project's API.
 
 ## Convert a PFX identity
 

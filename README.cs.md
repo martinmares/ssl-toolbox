@@ -65,7 +65,7 @@ just version         # obsah VERSION
 | `notices` | Obnovení licenčního přehledu závislostí všech release platforem |
 | `upgrade-modules` | Aktualizace externích Go modulů, checksums a notices, kontroly a lokální build |
 
-`VERSION` je jediný výchozí zdroj verze; počáteční verze je `1.0.0`.
+`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.0.1`.
 Před vydáním uprav číslo v tomto souboru a spusť `just check` a `just build-all`.
 Běžný `go build` také obsahuje verzi díky `go:embed`. Just buildy navíc přes
 linker vloží krátký Git commit a UTC čas sestavení. Bez Git repozitáře nebo
@@ -77,6 +77,50 @@ Release buildy používají `CGO_ENABLED=0`. V `dist/` jsou také `LICENSE`,
 licenční soubory. `dist/` je ignorovaný Gitem. Úloha `upgrade-modules` zachovává
 lokální modifikovanou PKCS#12 knihovnu přes `replace`; nesynchronizuje automaticky
 její zdrojový kód s upstreamem. Notices po aktualizaci závislostí obnoví automaticky.
+
+## GitLab Releases
+
+Vlastní `.gitlab-ci.yml` používá stejný release postup jako `oci-toolbox`:
+
+1. `release_notes` vygeneruje poznámky a metadata ze souboru `VERSION` a Git historie.
+2. `check` a `test` ověří sestavení, formátování, `go vet` a testy aplikace i lokální PKCS#12 knihovny.
+3. `release_binaries` sestaví šest archivů `.tar.gz`: Linux, macOS a Windows, vždy amd64 a arm64. Každý obsahuje binárku, obě README, `VERSION`, `LICENSE` a `THIRD_PARTY_NOTICES.md`. Vznikne i `SHA256SUMS`.
+4. Archivy se nahrají do GitLab Generic Package Registry a `publish_release` je propojí s GitLab Release `v<VERSION>`.
+
+Release se spustí při pushi změny `VERSION` na výchozí větev nebo ručně
+přes **Build → Pipelines → New pipeline** pro výchozí větev. Ostatní změny
+na výchozí větvi a merge requesty spustí kontroly. Soubor `VERSION` obsahuje
+sémantickou verzi bez prefixu `v`; pipeline může tag vytvořit při publikaci.
+Existující tag musí ukazovat na stejný commit, jinak zvýš verzi. Verze
+`1.0.1` je připravená pro první vydání přes tuto pipeline; starší `v1.0.0`
+ukazuje na původní commit.
+
+Build joby běží v `golang:1.27-bookworm` a kompilují přímo v Go. Žádný
+Dockerfile, buildpack ani deployment job není součástí této pipeline.
+Lokální `just build-all` nadále sestavuje tři hlavní cíle; release skript
+navíc doplňuje arm64 pro Linux/Windows a amd64 pro macOS.
+
+Publikace používá standardní `CI_JOB_TOKEN`; projekt musí povolovat Package
+Registry a publikování Releases. Mezi joby cestují pouze malá metadata
+s životností 30 dnů; archivy zůstávají v Package Registry a jsou ke stažení
+z Releases. Opakování stejné verze na stejném commitu aktualizuje existující
+Release a jeho odkazy. Chybné checksums nebo nesoulad tagu publikaci zastaví.
+
+Volitelný `RELEASE_PUSH_TOKEN` s oprávněním zápisu do repozitáře umožňuje
+zapsat generovaný `CHANGELOG.md` zpět do větve commitem s `[skip ci]`.
+Bez něj zůstanou release notes u vydání a do repozitáře se nic nezapisuje.
+
+Lokální příprava bez nahrávání:
+
+```sh
+bash scripts/ci_release_notes.sh
+bash scripts/ci_package_release.sh
+(cd dist/release && shasum -a 256 -c SHA256SUMS)
+```
+
+Go module path je `github.com/martinmares/ssl-toolbox`. GitLab pipeline
+sestavuje lokální checkout, takže kvůli této cestě nepotřebuje přístup
+k GitHub repozitáři. Pro publikaci používá API aktuálního GitLab projektu.
 
 ## Převod klientského PFX
 

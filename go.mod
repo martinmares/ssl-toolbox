@@ -1,4 +1,4 @@
-module ssl-toolbox
+module github.com/martinmares/ssl-toolbox
 
 go 1.26.0
 
