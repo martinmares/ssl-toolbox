@@ -1,0 +1,415 @@
+# ssl-toolbox
+
+[English documentation](README.md)
+
+Go CLI pro převod PKCS#12, Java truststore a výměnu binárních souborů v YAML
+manifestech Kubernetes ConfigMap. Operace s úložišti běží přímo v Go bez
+OpenSSL a Javy. CLI je rozdělené na Cobra příkazy s vlastní nápovědou.
+
+## Sestavení a přehled
+
+Je potřeba Go 1.26 nebo novější.
+
+```sh
+go build -o ssl-toolbox .
+./ssl-toolbox
+./ssl-toolbox examples
+./ssl-toolbox convert --help
+./ssl-toolbox truststore --help
+./ssl-toolbox configmap set-binary --help
+./ssl-toolbox configmap extract-binary --help
+./ssl-toolbox inspect --help
+```
+
+| Příkaz | Účel |
+|---|---|
+| `convert` | Převod existující identity nebo truststore z PKCS#12 na moderní PFX či JKS, případně přidání CA |
+| `truststore` | Vytvoření čistého PFX/JKS truststore z CA PEM souborů |
+| `configmap set-binary` | Nahrazení položky `binaryData` obsahem souboru zakódovaným do base64 |
+| `inspect` | Rozpoznání formátu podle obsahu a výpis všech certifikátů a klíčů; také JSON |
+| `configmap extract-binary` | Obnova přesných binárních bajtů z klíče `binaryData` do nového souboru |
+| `examples` | Přehled variant příkazů s vysvětlením a barevnými ukázkami |
+| `version` | Verze a metadata sestavení; krátký výpis také přes `--version` |
+
+Příkaz je nyní povinný: původní `ssl-toolbox --in ... --out ...` nahraď
+`ssl-toolbox convert --in ... --out ...`. Pro vytvoření úložiště pouze z CA
+použij `truststore`. Původní přepínače s jednou pomlčkou (`-in`, `-out`,
+`-add-ca` atd.) uvnitř příkazů pro úložiště stále fungují; dokumentace používá
+dvě pomlčky.
+
+## Justfile a verzování
+
+[just](https://just.systems/) poskytuje úlohy pro vývoj a sestavení:
+
+```sh
+just                 # přehled úloh
+just check           # formátování bez změn + testy + go vet
+just build           # lokální ./ssl-toolbox
+just build-all       # Linux amd64, macOS arm64 a Windows amd64 do dist/
+just version         # obsah VERSION
+./ssl-toolbox --version
+./ssl-toolbox version # verze, commit, čas buildu, Go a platforma
+```
+
+| Úloha | Účel |
+|---|---|
+| `build` | Nativní binárka v kořeni projektu |
+| `build-linux` | `dist/ssl-toolbox-linux-amd64` |
+| `build-macos` | `dist/ssl-toolbox-darwin-arm64` |
+| `build-windows` | `dist/ssl-toolbox-windows-amd64.exe` |
+| `build-all` | Všechny tři release platformy |
+| `test`, `vet` | Testy a statická kontrola včetně lokální PKCS#12 knihovny |
+| `fmt`, `fmt-check` | Naformátování, případně kontrola bez zápisu |
+| `check` | `fmt-check`, `test` a `vet` |
+| `version` | Aktuální číslo ze souboru `VERSION` |
+| `notices` | Obnovení licenčního přehledu závislostí všech release platforem |
+| `upgrade-modules` | Aktualizace externích Go modulů, checksums a notices, kontroly a lokální build |
+
+`VERSION` je jediný výchozí zdroj verze; počáteční verze je `1.0.0`.
+Před vydáním uprav číslo v tomto souboru a spusť `just check` a `just build-all`.
+Běžný `go build` také obsahuje verzi díky `go:embed`. Just buildy navíc přes
+linker vloží krátký Git commit a UTC čas sestavení. Bez Git repozitáře nebo
+linker metadat se commit/čas zobrazují jako `unknown`. Úlohy nevytvářejí tagy,
+commity a nic nepublikují.
+
+Release buildy používají `CGO_ENABLED=0`. V `dist/` jsou také `LICENSE`,
+`THIRD_PARTY_NOTICES.md`, oba README a `VERSION`; při distribuci binárek přibal
+licenční soubory. `dist/` je ignorovaný Gitem. Úloha `upgrade-modules` zachovává
+lokální modifikovanou PKCS#12 knihovnu přes `replace`; nesynchronizuje automaticky
+její zdrojový kód s upstreamem. Notices po aktualizaci závislostí obnoví automaticky.
+
+## Převod klientského PFX
+
+```sh
+ssl-toolbox convert --in legacy-client.pfx --out modern-client.pfx
+
+ssl-toolbox convert --in legacy-client.pfx --out client.jks \
+  --format jks --alias client
+```
+
+Vstup může používat staré šifry RC2/3DES nebo podporované Windows BER obaly.
+Privátní klíč, klientský certifikát i přiložený CA řetězec zůstávají zachované.
+Program se skrytě zeptá na původní heslo a dvakrát na nové.
+**Stejné nové heslo chrání výstupní úložiště i privátní klíč.**
+Původní heslo může být prázdné, nové nesmí. Dešifrovaný klíč se zpracovává
+v paměti bez dočasných PEM souborů.
+
+| Přepínač | Význam |
+|---|---|
+| `--in` | Povinný vstupní PKCS#12 soubor; přípona nerozhoduje |
+| `--out` | Povinný nový výstupní soubor; nesmí existovat |
+| `--format` | `pfx` (výchozí) nebo `jks`; přípona neurčuje formát |
+| `--alias` | Alias privátního klíče v JKS, výchozí `client`; ukládá se malými písmeny |
+| `--add-ca` | Opakovatelný CA PEM soubor; může obsahovat více certifikátů |
+| `--in-pass-env` | Název proměnné prostředí s původním heslem |
+| `--in-pass-file` | Soubor se vstupním heslem |
+| `--out-pass-file` | Soubor s novým heslem |
+| `--out-pass-env` | Název proměnné prostředí s novým heslem |
+
+Výstup PFX používá AES-256-CBC, PBKDF2 a MAC SHA-256 (`Modern2023`).
+Výstup JKS je skutečný Java KeyStore s vlastní starší ochranou klíče a
+kontrolním součtem SHA-1. Soubor s příponou `.jks` může obsahovat PKCS#12;
+přípona formát neurčuje. Java používá PKCS#12 jako výchozí od JDK 9
+([dokumentace keytool](https://docs.oracle.com/en/java/javase/21/docs/specs/man/keytool.html)).
+
+## Důvěryhodné CA a truststore
+
+CA řetězec klientského certifikátu patří k jeho identitě. Samostatná důvěryhodná
+CA naopak říká aplikaci, kterým vydavatelům může důvěřovat při ověřování protistrany.
+`--add-ca` vytváří samostatné důvěryhodné položky; nepřipojuje nesouvisející CA
+k řetězci klientského klíče.
+
+```sh
+ssl-toolbox convert --in client.pfx --out client-with-ca.pfx \
+  --add-ca root-ca.pem --add-ca another-ca.pem
+
+ssl-toolbox convert --in client.pfx --out client-with-ca.jks \
+  --format jks --alias client --add-ca root-ca.pem
+```
+
+Čistý truststore bez privátního klíče vytvoříš takto:
+
+```sh
+ssl-toolbox truststore --out truststore.pfx \
+  --add-ca root-ca.pem --add-ca ca-bundle.pem
+
+ssl-toolbox truststore --out truststore.jks --format jks \
+  --add-ca ca-bundle.pem
+```
+
+`truststore` vyžaduje `--out` a alespoň jeden `--add-ca`. Podporuje také
+`--format` a `--out-pass-env`; ptá se pouze na nové heslo. Nemá `--in`,
+vstupní heslo ani alias privátního klíče.
+
+PEM může obsahovat několik certifikátů. Každý přidávaný certifikát musí mít
+`CA:TRUE`. Prázdné soubory, vadné PEM/DER a jiné PEM objekty se odmítnou
+před zadáváním hesla. Duplicity se odstraní a důvěryhodné položky mají alias
+`ca-<SHA-256 otisk>`. PFX obsahuje Java trust atributy, takže Java položky
+zobrazí jako `trustedCertEntry`; v JKS vznikají odpovídající trusted entries.
+Aplikaci je potřeba nastavit, aby soubor skutečně používala jako truststore.
+
+Příkaz `convert` načte i čistý nebo kombinovaný PKCS#12 truststore. Při dalším
+převodu zachová důvěryhodnou roli certifikátů a jejich aliasy sjednotí na otisky.
+JKS je zatím pouze výstupní formát. Vstup PKCS#12 podporuje jednu privátní
+identitu; kontejnery s více identitami ani rozdílné vstupní heslo pro MAC a klíč
+nepodporuje. Libovolná původní metadata, například friendly name klíče, se
+nezachovávají. Lokální kopie SSLMate doplňuje cílenou podporu BER a kombinaci
+identity s důvěryhodnými položkami; viz [lokální změny](third_party/go-pkcs12/LOCAL_CHANGES.md).
+
+## Hesla v automatizaci
+
+Místo interaktivního zadávání předej názvy proměnných prostředí:
+
+```sh
+# Proměnné nejprve nastav v shellu nebo pomocí poskytovatele tajných údajů.
+ssl-toolbox convert --in client.pfx --out modern.pfx \
+  --in-pass-env OLD_PFX_PASSWORD --out-pass-env NEW_PFX_PASSWORD
+
+ssl-toolbox truststore --out truststore.jks --format jks \
+  --add-ca root-ca.pem --out-pass-env NEW_PFX_PASSWORD
+```
+
+Názvy proměnných jsou libovolné. Chybějící proměnná způsobí chybu; výslovně
+prázdná vstupní proměnná znamená prázdné původní heslo. Hodnoty hesel nejsou
+argumenty programu. Skryté zadávání vyžaduje terminál. Výstupní soubory se
+nepřepisují; na Unixu mají nová úložiště oprávnění `0600`.
+
+### Hesla ze souborů a GitLab pipeline
+
+Každý zdroj hesla má variantu ENV i FILE:
+
+| Příkaz | ENV (název proměnné) | FILE (cesta k souboru) |
+|---|---|---|
+| `convert`, vstup | `--in-pass-env` | `--in-pass-file` |
+| `convert` / `truststore`, nové heslo | `--out-pass-env` | `--out-pass-file` |
+| `inspect`, úložiště / šifrovaný PEM nebo DER | `--pass-env` | `--pass-file` |
+| `inspect`, samostatné heslo JKS klíče | `--key-pass-env` | `--key-pass-file` |
+
+ENV a FILE pro stejné heslo se nesmějí kombinovat. Pro různá hesla je můžeš
+libovolně míchat. ENV čte hodnotu přesně; FILE odstraní jeden koncový LF nebo
+CRLF, ostatní znaky včetně mezer zachová. Prázdný soubor nebo ENV je platný
+zdroj prázdného vstupního hesla; nové heslo musí být neprázdné. ENV/FILE nové
+heslo nevyžaduje potvrzení. Chybějící proměnná, nečitelný soubor, nesprávné
+heslo nebo potřeba dotazu bez terminálu skončí chybou a nenulovým návratovým
+kódem. Hesla ani jejich obsah se nelogují.
+
+U GitLab CI/CD proměnných typu **File** je hodnotou proměnné cesta; předej ji
+FILE přepínači. U běžné proměnné předej její název ENV přepínači. Následující
+job předpokládá dostupnou binárku a vstupní soubor; hesla nastav v CI/CD
+Variables, nikoli do YAML:
+
+```yaml
+fix-keystore:
+  script:
+    - ssl-toolbox convert --in client.pfx --out modern.pfx --in-pass-file "$OLD_PFX_PASSWORD_FILE" --out-pass-file "$NEW_PFX_PASSWORD_FILE"
+    - ssl-toolbox inspect modern.pfx --pass-file "$NEW_PFX_PASSWORD_FILE" --json > inspection.json
+```
+
+Varianta s běžnými ENV proměnnými:
+
+```sh
+ssl-toolbox convert --in client.pfx --out modern.pfx --in-pass-env OLD_PFX_PASSWORD --out-pass-env NEW_PFX_PASSWORD
+ssl-toolbox inspect modern.pfx --pass-env NEW_PFX_PASSWORD --color never
+ssl-toolbox truststore --out truststore.pfx --add-ca root-ca.pem --out-pass-file "$NEW_PFX_PASSWORD_FILE"
+```
+
+ConfigMap příkazy, `version` a `examples` hesla nepotřebují. V pipeline
+použij nové výstupní soubory (`set-binary --out`, `extract-binary --out`),
+případně `--dry-run`. `examples --color never` poskytne čistý text.
+
+## Nahrazení binárního obsahu ConfigMap
+
+Pole `binaryData` v ConfigMap obsahuje řetězce v base64
+([dokumentace Kubernetes](https://kubernetes.io/docs/concepts/configuration/configmap/)).
+Příkaz načte přesné bajty souboru `--file`, sám je zakóduje do base64 a
+nahradí vybraný klíč. Neupravuje samotné úložiště a nekomunikuje s Kubernetes.
+
+```sh
+ssl-toolbox configmap set-binary \
+  --manifest assets.yml \
+  --key client.jks \
+  --file new-client.jks \
+  --dry-run
+```
+
+Po odstranění `--dry-run` upraví `assets.yml` přímo. Původní bajty nejprve
+uloží do `assets.yml.bak`; existující zálohu nikdy nepřepíše. Náhradní soubor
+se připraví a synchronizuje ve stejném adresáři a pak se atomicky přejmenuje.
+Oprávnění manifestu zůstávají zachovaná; záloha má `0600`. Přímá úprava
+vyžaduje běžný soubor, nikoli symlink. Pokud hodnota už odpovídá novému
+souboru, nic se nezapisuje a nevzniká záloha.
+
+| Přepínač | Význam |
+|---|---|
+| `--manifest` | Povinný vstupní YAML manifest |
+| `--key` | Povinný klíč v `binaryData`; písmena, číslice, `.`, `_` a `-` |
+| `--file` | Povinný zdrojový binární soubor |
+| `--dry-run` | Zobrazí cílovou ConfigMap/klíč a původní i novou velikost v bajtech; nic nezapisuje |
+| `--out` | Vytvoří nový YAML místo úpravy původního; nesmí existovat; nevzniká záloha |
+| `--create` | Povolí přidat chybějící klíč nebo mapu `binaryData` |
+| `--name` | Výběr podle `metadata.name`, pokud je ConfigMap více |
+| `--namespace` | Upřesnění podle `metadata.namespace` |
+
+Manifest může obsahovat více YAML dokumentů. Výběr musí určit právě jednu
+`apiVersion: v1`, `kind: ConfigMap`. Klíč musí existovat, pokud nepoužiješ
+`--create`. Kolize s klíčem v `data`, neplatná původní base64 a duplicitní YAML
+klíče se odmítnou. Cílové mapy ani nahrazovaná hodnota nesmějí používat YAML
+kotvy, aliasy nebo merge. ConfigMap uvnitř `List.items` se nevybírají.
+Ostatní dokumenty, hodnoty a komentáře se zachovají; mezery, uvozovky a
+formátování může YAML encoder upravit. Binární ani base64 obsah se nevypisuje,
+ani při `--dry-run`.
+
+Zápis do jiného souboru nebo přidání klíče do vybrané ConfigMap:
+
+```sh
+ssl-toolbox configmap set-binary --manifest assets.yml \
+  --key client.jks --file new-client.jks --out updated-assets.yml
+
+ssl-toolbox configmap set-binary --manifest resources.yml \
+  --name client-assets --namespace prod \
+  --key root-ca.der --file root-ca.der --create
+```
+
+### Ukázka v projektovém adresáři
+
+```sh
+ssl-toolbox configmap set-binary \
+  --manifest manifests/configmap.yaml \
+  --key client.jks \
+  --file certificates/client.jks \
+  --dry-run
+```
+
+Po kontrole cíle odstraň poslední `--dry-run`. Před pozdější opakovanou úpravou
+nejprve sám přesuň nebo odstraň předchozí `.bak`, případně použij `--out`.
+
+## Inspekce úložišť, certifikátů a klíčů
+
+```sh
+ssl-toolbox inspect client.jks
+ssl-toolbox inspect ca-bundle.pem
+ssl-toolbox inspect client.der
+ssl-toolbox inspect client.pfx --pass-env STORE_PASSWORD --json > inspection.json
+ssl-toolbox inspect client.jks --pass-env STORE_PASSWORD --key-pass-env KEY_PASSWORD
+```
+
+Formát se určí podle obsahu, bez ohledu na příponu: PKCS#12/PFX (včetně
+podporovaného BER a legacy šifrování), skutečné JKS, PEM balíčky a DER.
+DER může obsahovat certifikát, navazující certifikáty, veřejný nebo privátní
+klíč; podporované klíče zahrnují PKCS#8, RSA PKCS#1 a EC SEC1. Šifrovaný
+PKCS#8 a starší šifrovaný PEM se také dešifrují přímo v Go.
+
+Vypíšou se všechny podporované položky, včetně více privátních klíčů,
+certifikátů z řetězců a samostatných trusted CA. U certifikátů uvidíš subject,
+issuer, sériové číslo, platnost a její stav, CA/basic constraints, SAN, KU/EKU,
+podpisový algoritmus a SHA-256 otisk. U klíčů algoritmus, délku, EC křivku
+a SHA-256 veřejné části (SPKI). Výpis propojí odpovídající klíče a certifikáty,
+ukáže aliasy, localKeyID, dostupná data vytvoření a parametry šifrování/MAC.
+Privátní bajty ani hesla se nevypisují. Stav platnosti podle data neznamená
+ověření důvěryhodného řetězce nebo revokace.
+
+Nejprve se vyzkouší prázdné heslo; pokud nestačí, následuje skrytý dotaz
+v terminálu. U JKS se pro klíč nejprve zkusí heslo úložiště, pak případně
+samostatný dotaz pro daný alias. `--pass-env` zadává **název proměnné**
+s heslem úložiště nebo šifrovaného PEM/DER klíče; `--key-pass-env` je
+samostatné heslo JKS klíčů. Chybějící proměnná nebo nesprávné zadané heslo
+je chyba. `--json` mění výstup na strukturovaná metadata; dotazy zůstávají
+na stderr. Inspekce kontroluje integritu PFX/JKS, pokud je přítomná.
+Nepodporovaný PFX bag se označí jeho OID; nepodporovaný PEM blok,
+neplatná položka nebo chyba dešifrování ukončí příkaz bez částečného výpisu.
+PEM očekává bloky oddělené bílými znaky, nikoli textový dump OpenSSL.
+
+### Barvy a expirace
+
+`inspect` používá `--color auto|always|never`. `auto` barví pouze terminál,
+respektuje `NO_COLOR` a `TERM=dumb`; `always` barvy vynutí. JSON zůstává vždy
+bez ANSI barev. Nadpisy a popisky jsou tyrkysové, privátní klíče žluté,
+trusted certifikáty modré; aliasy a subject jsou zvýrazněné, otisky tlumené.
+Stav `EXPIRED` je červený, `EXPIRING SOON` a `NOT YET VALID` žlutý a platný
+certifikát zelený. Explicitní textové značky zůstávají i bez barev.
+
+Na začátku je souhrn problémových dat platnosti, u každé položky termín
+expirace a zbývající čas. Výchozí varování je **30 dnů**; změň jej přes
+`--expiry-warning-days 60`, nebo použij `0` pro vypnutí varování předem.
+Expirované certifikáty se označují vždy. JSON obsahuje `expiry_warning_days`,
+`validity` a podepsaný `expires_in_seconds`. Tyto stavy jsou informativní,
+samy o sobě nemění návratový kód; čtení/dešifrování musí být úspěšné.
+
+```sh
+ssl-toolbox inspect client.pfx --expiry-warning-days 60
+ssl-toolbox inspect client.pfx --color always
+ssl-toolbox inspect client.pfx --pass-env STORE_PASSWORD --color never
+```
+
+## Extrakce binárního souboru z ConfigMapy
+
+```sh
+ssl-toolbox configmap extract-binary assets.yml client.jks --out extracted.jks
+ssl-toolbox configmap extract-binary resources.yml client.jks \
+  --name client-assets --namespace prod --out client.jks
+ssl-toolbox inspect extracted.jks
+```
+
+Manifest a klíč jsou poziční argumenty. Povinné `--out` vytvoří nový soubor
+s oprávněními `0600`; existující soubor ani symlink se nepřepíše. Zdrojový
+YAML se vůbec nemění a nevzniká `.bak`. Hodnota `binaryData` se dekóduje
+z base64 do přesných původních bajtů, včetně prázdného souboru. Výpis
+obsahuje jen cíl, počet bajtů a SHA-256 otisk.
+
+Výběr `--name`/`--namespace` a ověřování YAML sdílí pravidla s `set-binary`.
+Vybraná ConfigMap musí být jednoznačná a klíč musí existovat v `binaryData`.
+`data` se tímto příkazem neextrahuje. Neplatná base64, duplicitní klíče,
+kolize s `data` a kotvy/aliasy v cílových mapách či hodnotě se odmítnou.
+
+## Vysvětlené příklady a barvy
+
+```sh
+ssl-toolbox examples
+ssl-toolbox examples --color always
+ssl-toolbox examples --color never > examples.txt
+```
+
+Katalog má podobné členění jako `oci-toolbox examples`: tyrkysové nadpisy,
+žluté názvy příkladů, zelené shell příkazy a modré ukázky souborů.
+Každá varianta vysvětluje přepínače a účinky. `example` je alias příkazu.
+Výchozí `--color auto` barví jen výstup do terminálu; přesměrování, `NO_COLOR`
+a `TERM=dumb` barvy vypínají. `always` výslovně vynutí ANSI barvy.
+Výpis příklady zobrazuje, nespouští je.
+
+## Ověření a testy
+
+```sh
+go test ./... software.sslmate.com/src/go-pkcs12
+go vet ./... software.sslmate.com/src/go-pkcs12
+
+# Volitelné externí ověření; nástroje se zeptají na nové heslo.
+openssl pkcs12 -in modern.pfx -info -noout
+keytool -list -v -storetype JKS -keystore client.jks
+keytool -list -v -storetype PKCS12 -keystore truststore.pfx
+```
+
+Testy ověřují legacy/BER vstupy, hesla, zachování klíče a řetězce, PEM balíčky,
+duplicity, trusted entries a opětovný převod. Pokud jsou nástroje dostupné,
+OpenSSL/LibreSSL dešifruje vytvořený klíč a Java `keytool` importuje a kontroluje
+oba výstupní formáty. YAML testy ověřují výběr dokumentu, zachování obsahu,
+base64, režimy create/dry-run/out, ochranu zálohy a oprávnění. Testy katalogu
+ověřují ANSI režimy a chyby výstupu. Platnost certifikátů a oprávnění ke Kafce
+se převodem nemění; výsledek ověř ve skutečném klientském prostředí.
+
+Testy nových příkazů ověřují více identit v PFX/JKS, samostatná hesla JKS klíčů, PEM/DER, šifrovaný PKCS#8, metadata JSON bez privátního materiálu a přesnou extrakci binárních bajtů bez změny manifestu.
+
+## Licence a správa projektu
+
+Kód projektu je pod standardní [MIT License](LICENSE),
+Copyright (c) 2026 Martin Mareš. Software je poskytován „AS IS“, bez záruk a
+bez nároku na bezplatnou komunitní podporu. Přijetí nebo review externích pull
+requestů není garantované. Tato pravidla neomezují práva udělená MIT licencí.
+
+Licence a copyright notices závislostí zůstávají zachované; viz
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Lokální PKCS#12 knihovna si
+ponechává původní [BSD licenci](third_party/go-pkcs12/LICENSE).
+
+Po publikování na GitHubu vypni Issues a Discussions a nastav ochranu větve
+`main`; oprávnění k zápisu dej pouze vlastníkovi a výslovně pověřeným maintainerům.
+Na GitLabu nastav odpovídající ochranu a dostupnost podpůrných funkcí.
+Podrobný stav aplikace licenční politiky je v [LICENSING_STATUS.md](LICENSING_STATUS.md).
