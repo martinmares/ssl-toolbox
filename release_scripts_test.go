@@ -32,7 +32,7 @@ func releaseFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"ci_release_common.sh", "ci_release_notes.sh", "ci_upload_release_packages.sh", "ci_publish_release.sh"} {
+	for _, name := range []string{"ci_release_common.sh", "ci_release_notes.sh", "ci_publish_github_release.sh", "ci_upload_release_packages.sh", "ci_publish_release.sh"} {
 		data, err := os.ReadFile(filepath.Join("scripts", name))
 		if err != nil {
 			t.Fatal(err)
@@ -44,6 +44,13 @@ func releaseFixture(t *testing.T) string {
 	name := "ssl-toolbox-1.2.3-linux-amd64.tar.gz"
 	write("dist/release/"+name, "test archive")
 	write("dist/release/SHA256SUMS", fmt.Sprintf("%x  %s\n", sha256.Sum256([]byte("test archive")), name))
+
+	write("bin/gh", `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+if [[ "$1 $2" == "release view" ]]; then exit "${GH_EXISTS:-1}"; fi
+if [[ "$1" == api ]]; then echo "$REMOTE_COMMIT"; fi
+if [[ "$1 $2" == "release upload" && "${GH_UPLOAD_FAIL:-0}" == 1 ]]; then exit 1; fi
+`)
 
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "ci@example.com"}, {"config", "user.name", "Release test"}, {"add", "."}, {"commit", "-qm", "fixture"}} {
 		cmd := exec.Command("git", args...)
@@ -328,5 +335,177 @@ func TestGitLabRejectsReleaseTagConflict(t *testing.T) {
 	defer server.Close()
 	if out, err := runReleaseScript(dir, "ci_publish_release.sh", "CI_API_V4_URL="+server.URL, "CI_PROJECT_ID=1", "CI_JOB_TOKEN=test"); err == nil || !strings.Contains(out, "different commit") {
 		t.Fatalf("tag overwrite allowed: %s %v", out, err)
+	}
+}
+
+func runGitHubReleaseScript(dir string, env ...string) (string, error) {
+	defaults := []string{"GH_TOKEN=test", "GH_REPO=example/tool", "GH_LOG=" + filepath.Join(dir, "gh.log")}
+	return runReleaseScript(dir, "ci_publish_github_release.sh", append(defaults, env...)...)
+}
+
+func TestGitHubReleaseCreationAndRetry(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			dir := releaseFixture(t)
+			cmd := exec.Command("git", "rev-parse", "HEAD")
+			cmd.Dir = dir
+			sha, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			exists := "1"
+			if existing {
+				exists = "0"
+			}
+			out, err := runGitHubReleaseScript(dir, "GH_EXISTS="+exists, "REMOTE_COMMIT="+strings.TrimSpace(string(sha)))
+			if err != nil {
+				t.Fatalf("%s: %v", out, err)
+			}
+			log, _ := os.ReadFile(filepath.Join(dir, "gh.log"))
+			text := string(log)
+			if strings.Contains(text, "release create") == existing {
+				t.Fatalf("wrong creation/retry: %s", text)
+			}
+			for _, want := range []string{"release upload", "--clobber", "--draft=false", "--prerelease=false", "--repo example/tool"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("missing %s: %s", want, text)
+				}
+			}
+			if !existing && (!strings.Contains(text, "--draft") || !strings.Contains(text, "--target "+strings.TrimSpace(string(sha)))) {
+				t.Fatal("missing draft or exact commit")
+			}
+			if strings.Index(text, "release upload") > strings.Index(text, "release edit") {
+				t.Fatal("published before uploading assets")
+			}
+		})
+	}
+}
+
+func TestGitHubReleaseFailuresAndPrerelease(t *testing.T) {
+	for _, scenario := range []string{"checksum", "remote-commit", "existing-tag", "upload", "prerelease"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := releaseFixture(t)
+			env := []string{}
+			switch scenario {
+			case "checksum":
+				if err := os.WriteFile(filepath.Join(dir, "dist/release/ssl-toolbox-1.2.3-linux-amd64.tar.gz"), []byte("corrupt"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "remote-commit":
+				env = append(env, "GH_EXISTS=0", "REMOTE_COMMIT="+strings.Repeat("0", 40))
+			case "existing-tag":
+				cmd := exec.Command("git", "tag", "v1.2.3")
+				cmd.Dir = dir
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("%s: %v", out, err)
+				}
+				env = append(env, "REMOTE_COMMIT="+strings.Repeat("0", 40))
+			case "upload":
+				env = append(env, "GH_UPLOAD_FAIL=1")
+			case "prerelease":
+				if err := os.WriteFile(filepath.Join(dir, "VERSION"), []byte("1.2.3-rc.1\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				oldName := "ssl-toolbox-1.2.3-linux-amd64.tar.gz"
+				newName := "ssl-toolbox-1.2.3-rc.1-linux-amd64.tar.gz"
+				if err := os.Rename(filepath.Join(dir, "dist/release", oldName), filepath.Join(dir, "dist/release", newName)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "dist/release/SHA256SUMS"), []byte(fmt.Sprintf("%x  %s\n", sha256.Sum256([]byte("test archive")), newName)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, err := runGitHubReleaseScript(dir, env...)
+			log, _ := os.ReadFile(filepath.Join(dir, "gh.log"))
+			text := string(log)
+			if scenario == "prerelease" {
+				if err != nil || !strings.Contains(text, "--prerelease=true") {
+					t.Fatalf("prerelease: %s %s %v", out, text, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted %s: %s", scenario, out)
+			}
+			if strings.Contains(text, "release edit") {
+				t.Fatal("published after failure")
+			}
+			if scenario != "upload" && (strings.Contains(text, "release upload") || strings.Contains(text, "release create")) {
+				t.Fatal("writes after failed preflight")
+			}
+		})
+	}
+}
+
+func TestGitHubWorkflowConfiguration(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		On struct {
+			Push     struct{ Branches, Paths []string } `yaml:"push"`
+			Dispatch *yaml.Node                         `yaml:"workflow_dispatch"`
+		} `yaml:"on"`
+		Permissions map[string]string `yaml:"permissions"`
+		Concurrency struct {
+			Cancel bool `yaml:"cancel-in-progress"`
+		} `yaml:"concurrency"`
+		Jobs map[string]struct {
+			If          string            `yaml:"if"`
+			Permissions map[string]string `yaml:"permissions"`
+			Steps       []struct {
+				Name, Uses, Run string
+				With            map[string]any    `yaml:"with"`
+				Env             map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.On.Push.Branches) != 1 || config.On.Push.Branches[0] != "main" || len(config.On.Push.Paths) != 1 || config.On.Push.Paths[0] != "VERSION" {
+		t.Fatal("wrong automatic release trigger")
+	}
+	// A null workflow_dispatch key is valid; check its presence separately.
+	var root map[string]any
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	on := root["on"].(map[string]any)
+	if _, ok := on["workflow_dispatch"]; !ok {
+		t.Fatal("missing manual release trigger")
+	}
+	job, ok := config.Jobs["release"]
+	if !ok || job.Permissions["contents"] != "write" || config.Permissions["contents"] != "read" || job.If != "github.ref == 'refs/heads/main'" || config.Concurrency.Cancel {
+		t.Fatal("invalid publish permissions or release guard")
+	}
+	runs := ""
+	publish := -1
+	test := -1
+	packageStep := -1
+	for i, step := range job.Steps {
+		runs += step.Run + "\n"
+		if strings.HasPrefix(step.Uses, "actions/checkout@") && step.With["fetch-depth"] != 0 {
+			t.Fatal("full tag history is required")
+		}
+		if strings.HasPrefix(step.Uses, "actions/setup-go@") && step.With["go-version-file"] != "go.mod" {
+			t.Fatal("Go version must follow go.mod")
+		}
+		if step.Name == "Test" {
+			test = i
+		}
+		if strings.Contains(step.Run, "ci_package_release.sh") {
+			packageStep = i
+		}
+		if strings.Contains(step.Run, "ci_publish_github_release.sh") {
+			publish = i
+			if step.Env["GH_TOKEN"] != "${{ github.token }}" || step.Env["GH_REPO"] != "${{ github.repository }}" {
+				t.Fatal("missing built-in token/repository")
+			}
+		}
+	}
+	if test < 0 || packageStep <= test || publish <= packageStep || !strings.Contains(runs, "software.sslmate.com/src/go-pkcs12") {
+		t.Fatal("release must verify both modules and use the shared packaging script")
 	}
 }

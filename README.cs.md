@@ -65,7 +65,7 @@ just version         # obsah VERSION
 | `notices` | Obnovení licenčního přehledu závislostí všech release platforem |
 | `upgrade-modules` | Aktualizace externích Go modulů, checksums a notices, kontroly a lokální build |
 
-`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.0.1`.
+`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.0.2`.
 Před vydáním uprav číslo v tomto souboru a spusť `just check` a `just build-all`.
 Běžný `go build` také obsahuje verzi díky `go:embed`. Just buildy navíc přes
 linker vloží krátký Git commit a UTC čas sestavení. Bez Git repozitáře nebo
@@ -91,9 +91,7 @@ Release se spustí při pushi změny `VERSION` na výchozí větev nebo ručně
 přes **Build → Pipelines → New pipeline** pro výchozí větev. Ostatní změny
 na výchozí větvi a merge requesty spustí kontroly. Soubor `VERSION` obsahuje
 sémantickou verzi bez prefixu `v`; pipeline může tag vytvořit při publikaci.
-Existující tag musí ukazovat na stejný commit, jinak zvýš verzi. Verze
-`1.0.1` je připravená pro první vydání přes tuto pipeline; starší `v1.0.0`
-ukazuje na původní commit.
+Existující tag musí ukazovat na stejný commit, jinak zvýš verzi.
 
 Build joby běží v `golang:1.27-bookworm` a kompilují přímo v Go. Žádný
 Dockerfile, buildpack ani deployment job není součástí této pipeline.
@@ -121,6 +119,29 @@ bash scripts/ci_package_release.sh
 Go module path je `github.com/martinmares/ssl-toolbox`. GitLab pipeline
 sestavuje lokální checkout, takže kvůli této cestě nepotřebuje přístup
 k GitHub repozitáři. Pro publikaci používá API aktuálního GitLab projektu.
+
+## GitHub Releases
+
+`.github/workflows/release.yml` používá stejné skripty pro release notes a balení
+jako GitLab. Spustí se při pushi změny `VERSION` na `main`, případně ručně přes
+**Actions → Release → Run workflow** s vybranou větví `main`. Pro ruční spuštění
+musí být workflow nejprve přítomný na výchozí větvi.
+
+Workflow ověří formátování, sestavení, testy a `go vet` obou modulů, poté vytvoří
+všech šest archivů a `SHA256SUMS`. Verzi Go převezme z `go.mod`. Publikace používá
+vestavěný `GITHUB_TOKEN` s oprávněním `contents: write`; není potřeba osobní token
+ani další secret. GitHub Actions musí být povolené a pravidla repozitáře nebo
+organizace musí toto oprávnění umožňovat.
+
+Nový release vznikne jako draft. Archivy a checksums se nahrají přímo jako
+přílohy vydání a teprve potom se release zveřejní. Opakování stejné verze na
+stejném commitu nahradí přílohy a aktualizuje poznámky. Existující tag na jiném
+commitu publikaci zastaví; místo přepisování tagu zvýš `VERSION`. Verze s příponou
+jako `1.0.2-rc.1` se označí jako prerelease.
+
+Pro stejnou verzi na GitHubu i obou GitLab serverech pushni stejný commit se změnou
+`VERSION` do všech repozitářů. Každý server vydá vlastní release z tohoto commitu.
+Lokální build úlohy nic nepublikují.
 
 ## Převod klientského PFX
 

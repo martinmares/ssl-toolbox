@@ -66,7 +66,7 @@ just version         # contents of VERSION
 | `upgrade-modules` | Upgrade external Go modules, refresh checksums/notices, check and build locally |
 
 `VERSION` is the single default source of the version; the current version is
-`1.0.1`. Before a release, edit this file, then run `just check` and
+`1.0.2`. Before a release, edit this file, then run `just check` and
 `just build-all`. A plain `go build` also contains the version through
 `go:embed`. Just builds additionally inject the short Git commit and UTC build
 time through linker flags. Without Git or linker metadata, commit/build time
@@ -91,9 +91,7 @@ Releases run when a push changes `VERSION` on the default branch, or manually
 through **Build → Pipelines → New pipeline** on that branch. Other default
 branch changes and merge requests run checks. `VERSION` contains a semantic
 version without a `v` prefix; publication can create the tag. Existing tags
-must reference the same commit, otherwise increment the version. Version
-`1.0.1` is prepared for the first release through this pipeline; the older
-`v1.0.0` references the initial commit.
+must reference the same commit, otherwise increment the version.
 
 Build jobs use `golang:1.27-bookworm` and compile directly with Go. This pipeline
 has no Dockerfile, buildpack or deployment job. Local `just build-all` still
@@ -122,6 +120,29 @@ bash scripts/ci_package_release.sh
 The Go module path is `github.com/martinmares/ssl-toolbox`. GitLab builds the
 local checkout, so this path does not require access to the GitHub repository.
 Publication uses the current GitLab project's API.
+
+## GitHub Releases
+
+`.github/workflows/release.yml` uses the same release notes and packaging scripts
+as GitLab. It runs when a push changes `VERSION` on `main`, or manually through
+**Actions → Release → Run workflow** with `main` selected. The workflow must
+first be present on the default branch to enable manual runs.
+
+The workflow checks formatting, compilation, tests and `go vet` for both modules,
+then builds all six platform archives and `SHA256SUMS`. Go is selected from
+`go.mod`. Publication uses the built-in `GITHUB_TOKEN` with `contents: write`;
+no personal access token or additional secret is required. GitHub Actions must
+be enabled and repository or organization policies must permit this permission.
+
+A new release starts as a draft. The archives and checksums are uploaded directly
+as release assets, then the release is published. Retrying the same version at
+the same commit replaces assets and updates notes. Existing tags pointing to
+another commit stop publication; increment `VERSION` instead. Versions containing
+a prerelease suffix, such as `1.0.2-rc.1`, are marked as prereleases.
+
+To publish the same version on GitHub and both GitLab servers, push the same
+commit containing the `VERSION` change to each repository. Each server publishes
+its own release from that commit. Local build jobs do not publish anything.
 
 ## Convert a PFX identity
 
