@@ -16,7 +16,7 @@ import (
 )
 
 func newPFXCommand(stdout, stderr io.Writer) *cobra.Command {
-	parent := &cobra.Command{Use: "pfx", Short: "Build a PFX identity from a private key and an issued certificate", Args: cobra.NoArgs}
+	parent := &cobra.Command{Use: "pfx", Short: "Create PFX identities and change PFX/key passwords", Args: cobra.NoArgs}
 	parent.RunE = func(cmd *cobra.Command, args []string) error { return cmd.Help() }
 	var keyPath, certPath, out, passEnv, passFile, keyPassEnv, keyPassFile string
 	var chainFiles []string
@@ -91,7 +91,7 @@ func newPFXCommand(stdout, stderr io.Writer) *cobra.Command {
 	for _, flag := range []string{"key", "cert", "out"} {
 		_ = cmd.MarkFlagRequired(flag)
 	}
-	parent.AddCommand(cmd)
+	parent.AddCommand(cmd, newPFXChangePasswordCommand(stdout, stderr))
 	return parent
 }
 

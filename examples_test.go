@@ -21,7 +21,7 @@ func TestExamplesOutput(t *testing.T) {
 		if strings.Contains(text, "\x1b[") != (mode == "always") {
 			t.Fatal("incorrect ANSI mode")
 		}
-		for _, part := range []string{"## CSR CREATE", "## CSR BATCH", "FILE · requests.yaml", "passwordEnv: KEY_PASSWORD", "## PFX CREATE", "--sans-file", "FILE · dns-names.txt", "--out-dir", "--chain", "## INSPECT", "## CONFIGMAP EXTRACT-BINARY", "--key-pass-env", "--json", "## CONVERT", "## TRUSTSTORE", "## CONFIGMAP SET-BINARY", "--dry-run", "--create", "--add-ca", "FILE · assets.yml", ".bak", "manifests/configmap.yaml"} {
+		for _, part := range []string{"## PFX CHANGE-PASSWORD", "--in-pass-env OLD_PFX_PASSWORD", "## CSR CREATE", "## CSR BATCH", "FILE · requests.yaml", "passwordEnv: KEY_PASSWORD", "## PFX CREATE", "--sans-file", "FILE · dns-names.txt", "--out-dir", "--chain", "## INSPECT", "## CONFIGMAP EXTRACT-BINARY", "--key-pass-env", "--json", "## CONVERT", "## TRUSTSTORE", "## CONFIGMAP SET-BINARY", "--dry-run", "--create", "--add-ca", "FILE · assets.yml", ".bak", "manifests/configmap.yaml"} {
 			if !strings.Contains(text, part) {
 				t.Fatalf("missing %s", part)
 			}

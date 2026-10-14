@@ -872,18 +872,21 @@ func (enc *Encoder) EncodeTrustStoreEntries(entries []TrustStoreEntry, password 
 		return nil, err
 	}
 
-	var pfx pfxPdu
-	pfx.Version = 3
-
-	certBags, err := makeTrustBags(entries)
+	bags, err := makeTrustBags(entries)
 	if err != nil {
 		return nil, err
 	}
 
+	return enc.encodeSafeBags(bags, encodedPassword)
+}
+
+func (enc *Encoder) encodeSafeBags(bags []safeBag, encodedPassword []byte) (pfxData []byte, err error) {
+	var pfx pfxPdu
+	pfx.Version = 3
 	// Construct an authenticated safe with one SafeContent.
-	// The SafeContents is contains the cert bags.
+	// The SafeContents contains all supplied bags.
 	var authenticatedSafe [1]contentInfo
-	if authenticatedSafe[0], err = makeSafeContents(enc.rand, certBags, enc.certAlgorithm, encodedPassword, enc.encryptionIterations, enc.saltLen); err != nil {
+	if authenticatedSafe[0], err = makeSafeContents(enc.rand, bags, enc.certAlgorithm, encodedPassword, enc.encryptionIterations, enc.saltLen); err != nil {
 		return nil, err
 	}
 

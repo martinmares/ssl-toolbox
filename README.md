@@ -29,6 +29,7 @@ go build -o ssl-toolbox .
 | `configmap set-binary` | Replace a ConfigMap `binaryData` value with a file's base64-encoded raw bytes |
 | `csr create` | Create an RSA/SHA-256 CSR and a private key, or reuse an existing RSA key |
 | `csr batch` | Validate and generate multiple CSRs from a YAML specification; supports dry-run |
+| `pfx change-password` | Change the PFX and private-key passwords together, replacing the same file in place |
 | `pfx create` | Package a private key, issued certificate and optional CA chain into modern PFX |
 | `inspect` | Detect certificates, keys and CSRs by content; text, JSON or PDF reports |
 | `extract` | Export a PFX identity as a PEM key, certificate and available CA chain |
@@ -71,7 +72,7 @@ just version         # contents of VERSION
 | `upgrade-modules` | Upgrade external Go modules, refresh checksums/notices, check and build locally |
 
 `VERSION` is the single default source of the version; the current version is
-`1.3.0`. Before a release, edit this file, then run `just check` and
+`1.4.0`. Before a release, edit this file, then run `just check` and
 `just build-all`. A plain `go build` also contains the version through
 `go:embed`. Just builds additionally inject the short Git commit and UTC build
 time through linker flags. Without Git or linker metadata, commit/build time
@@ -340,6 +341,40 @@ keys use separate `--key-pass-env` / `--key-pass-file` options. Existing outputs
 are never overwritten; the parent directory of `--out` must already exist.
 Use `convert --format jks` afterward if the application needs a real JKS store.
 
+## Change PFX and private-key passwords in place
+
+```sh
+ssl-toolbox pfx change-password client.pfx
+```
+
+The command prompts for the current password, a nonempty new password and
+confirmation, then replaces **the same file**. All private keys and the PFX
+use the same new password. Certificates, private-key contents, aliases,
+local key IDs, bag attributes, CA chains and trusted entries are retained;
+multiple identities, nested SafeContents and certificate-only stores are
+supported. Legacy encryption and supported BER input are accepted; output
+uses modern AES-256/SHA-256 protection.
+
+For a pipeline, supply passwords through ENV or FILE:
+
+```sh
+ssl-toolbox pfx change-password client.pfx \
+  --in-pass-env OLD_PFX_PASSWORD --out-pass-env NEW_PFX_PASSWORD
+
+ssl-toolbox pfx change-password client.pfx \
+  --in-pass-file "$OLD_PASSWORD_FILE" --out-pass-file "$NEW_PASSWORD_FILE"
+```
+
+The input must be a regular file; symlinks and directories are rejected.
+The replacement is written to a temporary file in the same directory,
+synced and read back to verify integrity and key decryption using the new
+password before renaming it over the original. File permission bits are
+retained. A failure before replacement leaves the original unchanged, and
+temporary files are cleaned up. Detected concurrent changes stop replacement.
+Same-directory rename is atomic on Unix; Go does not guarantee atomicity
+on non-Unix platforms. No backup is created. To keep the original file,
+use `convert --in original.pfx --out new-password.pfx` instead.
+
 ## Convert a PFX identity
 
 ```sh
@@ -446,6 +481,8 @@ Every password source supports ENV and FILE:
 | `convert` / `truststore`, new password | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, store / encrypted PEM or DER | `--pass-env` | `--pass-file` |
 | `csr create` / `pfx create`, existing encrypted key | `--key-pass-env` | `--key-pass-file` |
+| `pfx change-password`, current PFX password | `--in-pass-env` | `--in-pass-file` |
+| `pfx change-password`, new PFX/key password | `--out-pass-env` | `--out-pass-file` |
 | `pfx create`, new PFX/key password | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, separate JKS key password | `--key-pass-env` | `--key-pass-file` |
 | `extract`, input PFX | `--pass-env` | `--pass-file` |

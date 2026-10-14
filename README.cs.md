@@ -29,6 +29,7 @@ go build -o ssl-toolbox .
 | `configmap set-binary` | Nahrazení položky `binaryData` obsahem souboru zakódovaným do base64 |
 | `csr create` | Vytvoření RSA/SHA-256 CSR a klíče nebo použití existujícího RSA klíče |
 | `csr batch` | Kontrola a generování více CSR podle YAML; podpora dry-run |
+| `pfx change-password` | Změna hesla PFX i privátních klíčů s nahrazením stejného souboru |
 | `pfx create` | Zabalení klíče, vydaného certifikátu a případného CA řetězce do moderního PFX |
 | `inspect` | Rozpoznání certifikátů, klíčů a CSR podle obsahu; text, JSON nebo PDF |
 | `extract` | Export klíče, certifikátu a dostupného CA řetězce z PFX do PEM souborů |
@@ -70,7 +71,7 @@ just version         # obsah VERSION
 | `notices` | Obnovení licenčního přehledu závislostí všech release platforem |
 | `upgrade-modules` | Aktualizace externích Go modulů, checksums a notices, kontroly a lokální build |
 
-`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.3.0`.
+`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.4.0`.
 Před vydáním uprav číslo v tomto souboru a spusť `just check` a `just build-all`.
 Běžný `go build` také obsahuje verzi díky `go:embed`. Just buildy navíc přes
 linker vloží krátký Git commit a UTC čas sestavení. Bez Git repozitáře nebo
@@ -336,6 +337,39 @@ klíč slouží samostatné `--key-pass-env` / `--key-pass-file`. Existující v
 se nepřepisují; rodičovský adresář `--out` musí existovat. Pokud aplikace potřebuje
 skutečné JKS, výsledné PFX převeď příkazem `convert --format jks`.
 
+## Změna hesla PFX a privátních klíčů na místě
+
+```sh
+ssl-toolbox pfx change-password client.pfx
+```
+
+Příkaz se zeptá na současné heslo, neprázdné nové heslo a jeho potvrzení,
+potom nahradí **stejný soubor**. PFX i všechny privátní klíče použijí stejné
+nové heslo. Obsah certifikátů a klíčů, aliasy, local key ID, atributy položek,
+CA řetězce a trusted položky se zachovají. Podporuje se více identit,
+vnořené SafeContents i úložiště obsahující pouze certifikáty. Na vstupu
+funguje legacy šifrování a podporovaný BER; výstup používá moderní AES-256/SHA-256.
+
+Pro pipeline předej hesla přes ENV nebo FILE:
+
+```sh
+ssl-toolbox pfx change-password client.pfx \
+  --in-pass-env OLD_PFX_PASSWORD --out-pass-env NEW_PFX_PASSWORD
+
+ssl-toolbox pfx change-password client.pfx \
+  --in-pass-file "$OLD_PASSWORD_FILE" --out-pass-file "$NEW_PASSWORD_FILE"
+```
+
+Vstup musí být běžný soubor; symlinky a adresáře se odmítají. Nové PFX se
+zapíše do dočasného souboru ve stejném adresáři, synchronizuje a znovu načte.
+Před nahrazením se ověří integrita i dešifrování klíčů novým heslem.
+Přístupová práva souboru se zachovají. Chyba před nahrazením ponechá původní
+soubor beze změny a dočasné soubory se uklidí. Zjištěná souběžná změna
+původního souboru nahrazení zastaví. Přejmenování ve stejném adresáři je
+atomické na Unixu; na ostatních platformách Go atomicitu nezaručuje.
+Záloha nevzniká. Pokud chceš původní soubor zachovat, použij
+`convert --in original.pfx --out new-password.pfx`.
+
 ## Převod klientského PFX
 
 ```sh
@@ -442,6 +476,8 @@ Každý zdroj hesla má variantu ENV i FILE:
 | `convert` / `truststore`, nové heslo | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, úložiště / šifrovaný PEM nebo DER | `--pass-env` | `--pass-file` |
 | `csr create` / `pfx create`, existující šifrovaný klíč | `--key-pass-env` | `--key-pass-file` |
+| `pfx change-password`, současné heslo PFX | `--in-pass-env` | `--in-pass-file` |
+| `pfx change-password`, nové heslo PFX/klíče | `--out-pass-env` | `--out-pass-file` |
 | `pfx create`, nové heslo PFX/klíče | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, samostatné heslo JKS klíče | `--key-pass-env` | `--key-pass-file` |
 | `extract`, vstupní PFX | `--pass-env` | `--pass-file` |

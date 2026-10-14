@@ -1,6 +1,7 @@
 package pkcs12
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -61,6 +62,12 @@ func TestInspectMultipleIdentitiesAndNestedBags(t *testing.T) {
 		t.Fatal(err)
 	}
 	inner := []safeBag{{Id: oidKeyBag, Value: asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: keyDER}}}
+	alias, _ := bmpString("nested-identity")
+	aliasDER, err := asn1.Marshal(asn1.RawValue{Tag: 30, Bytes: alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner[0].Attributes = []pkcs12Attribute{{Id: oidFriendlyName, Value: asn1.RawValue{Tag: 17, IsCompound: true, Bytes: aliasDER}}}
 	nestedDER, err := asn1.Marshal(inner)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +116,33 @@ func TestInspectMultipleIdentitiesAndNestedBags(t *testing.T) {
 		}
 		if _, err := Inspect(input, "wrong"); !errors.Is(err, ErrIncorrectPassword) {
 			t.Fatalf("MAC bypassed: %v", err)
+		}
+		updated, err := Modern2023.ChangePassword(input, "secret", "new-secret")
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed, err := Inspect(updated, "new-secret")
+		if err != nil || len(changed.Entries) != len(info.Entries) {
+			t.Fatalf("password change lost nested/multiple identities: %v", err)
+		}
+		for i, original := range info.Entries {
+			entry := changed.Entries[i]
+			if entry.Alias != original.Alias || entry.LocalKeyID != original.LocalKeyID {
+				t.Fatal("password change altered bag metadata")
+			}
+			if original.Certificate != nil && !bytes.Equal(entry.Certificate.Raw, original.Certificate.Raw) {
+				t.Fatal("password change altered a certificate")
+			}
+			if original.PrivateKey != nil {
+				oldDER, _ := x509.MarshalPKCS8PrivateKey(original.PrivateKey)
+				newDER, _ := x509.MarshalPKCS8PrivateKey(entry.PrivateKey)
+				if !bytes.Equal(oldDER, newDER) || entry.Protection == nil || entry.Protection.Cipher != "AES-256-CBC" {
+					t.Fatal("password change altered a key or failed to encrypt it")
+				}
+			}
+		}
+		if _, err := Inspect(updated, "secret"); !errors.Is(err, ErrIncorrectPassword) {
+			t.Fatal("old password still accepted")
 		}
 	}
 }
