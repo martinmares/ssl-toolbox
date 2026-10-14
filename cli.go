@@ -7,14 +7,14 @@ import (
 
 func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use: "ssl-toolbox", Short: "Keystore inspection, conversion, truststores and ConfigMap binary assets",
+		Use: "ssl-toolbox", Short: "Certificate requests, keystores, truststores and ConfigMap binary assets",
 		Args: cobra.NoArgs, SilenceErrors: true, Version: currentVersion(),
 		RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
 	}
 	root.SetVersionTemplate("ssl-toolbox version {{.Version}}\n")
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newStoreCommand(false, stdout, stderr), newStoreCommand(true, stdout, stderr), newConfigMapCommand(stdout), newExamplesCommand(), newVersionCommand(), newInspectCommand(stdout, stderr), newExtractCommand(stdout, stderr))
+	root.AddCommand(newStoreCommand(false, stdout, stderr), newStoreCommand(true, stdout, stderr), newConfigMapCommand(stdout), newExamplesCommand(), newVersionCommand(), newInspectCommand(stdout, stderr), newExtractCommand(stdout, stderr), newCSRCommand(stdout, stderr), newPFXCommand(stdout, stderr))
 	return root
 }
 

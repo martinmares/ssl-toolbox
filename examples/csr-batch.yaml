@@ -1,0 +1,40 @@
+defaults:
+  rsaBits: 4096
+  subject:
+    country: CZ
+    province: Czech Republic
+    locality: Prague
+    organization: Example
+    organizationalUnit: WEB
+    email: admin@example.org
+
+requests:
+  - name: frontend
+    subject:
+      commonName: frontend.example.org
+    san:
+      dns:
+        - frontend.example.org
+        - frontend
+        - portal.example.org
+      ip:
+        - 192.0.2.10
+
+  - name: backend
+    subject:
+      commonName: backend.example.org
+    san:
+      dns:
+        - backend.example.org
+        - backend
+      ip:
+        - 192.0.2.20
+        - "2001:db8::20"
+
+  - name: wildcard
+    subject:
+      commonName: "*.example.org"
+    san:
+      dns:
+        - "*.example.org"
+        - example.org

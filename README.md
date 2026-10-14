@@ -27,7 +27,10 @@ go build -o ssl-toolbox .
 | `convert` | Convert an existing PKCS#12 identity or truststore to modern PFX or JKS; optionally add trusted CA certificates |
 | `truststore` | Create a certificate-only PFX/JKS truststore from CA PEM files |
 | `configmap set-binary` | Replace a ConfigMap `binaryData` value with a file's base64-encoded raw bytes |
-| `inspect` | Detect the format by content and inspect every certificate and key; optional JSON |
+| `csr create` | Create an RSA/SHA-256 CSR and a private key, or reuse an existing RSA key |
+| `csr batch` | Validate and generate multiple CSRs from a YAML specification; supports dry-run |
+| `pfx create` | Package a private key, issued certificate and optional CA chain into modern PFX |
+| `inspect` | Detect certificates, keys and CSRs by content; text, JSON or PDF reports |
 | `extract` | Export a PFX identity as a PEM key, certificate and available CA chain |
 | `configmap extract-binary` | Recover the exact binary bytes of a `binaryData` key into a new file |
 | `examples` | Print explained command variants and sample YAML, with terminal colors |
@@ -68,7 +71,7 @@ just version         # contents of VERSION
 | `upgrade-modules` | Upgrade external Go modules, refresh checksums/notices, check and build locally |
 
 `VERSION` is the single default source of the version; the current version is
-`1.2.0`. Before a release, edit this file, then run `just check` and
+`1.3.0`. Before a release, edit this file, then run `just check` and
 `just build-all`. A plain `go build` also contains the version through
 `go:embed`. Just builds additionally inject the short Git commit and UTC build
 time through linker flags. Without Git or linker metadata, commit/build time
@@ -145,6 +148,197 @@ a prerelease suffix, such as `1.0.2-rc.1`, are marked as prereleases.
 To publish the same version on GitHub and both GitLab servers, push the same
 commit containing the `VERSION` change to each repository. Each server publishes
 its own release from that commit. Local build jobs do not publish anything.
+
+## Create a certificate signing request
+
+```sh
+ssl-toolbox csr create \
+  --cn server.example.org --email admin@example.org \
+  --country CZ --province "Czech Republic" --locality Prague \
+  --organization Example --organizational-unit WEB \
+  --sans-file dns-names.txt --ip 192.0.2.10 --ip 2001:db8::10 \
+  --out-dir certificates --name server
+```
+
+`--out-dir` is a directory, created if needed. `--name` is a filename basename
+without an extension and defaults to CN. This example creates
+`certificates/server.key` and `certificates/server.csr`. Existing files are
+never overwritten. New directories use permissions 0700 and files 0600.
+The key is **unencrypted PKCS#8 PEM**, with RSA 4096 by default; `--bits` accepts
+2048, 3072, 4096 or 8192. The CSR uses SHA-256. Nothing invokes OpenSSL.
+
+CN and the output directory are required. Other Subject fields are optional;
+`--email` sets the Subject emailAddress, not an email SAN. There are no preset
+organization or location values and no OpenSSL configuration file to maintain.
+`--country` accepts two ASCII letters and normalizes them to uppercase.
+
+The DNS file contains one name per line:
+
+```text
+# Requested aliases
+server.example.org
+server
+```
+
+Blank lines and `#` comments, including inline comments, are ignored. Repeat
+`--dns` to add more DNS SANs and `--ip` to add IPv4/IPv6 SANs. Both can be combined
+with `--sans-file`. Duplicates are removed. DNS names use ASCII or punycode;
+`*.example.org` is supported, but wildcards are only allowed as the first label.
+Use an explicit `--name` for wildcard CNs. **CN is not automatically added to
+SAN**: list every requested hostname through `--dns` or the DNS file, and IP
+addresses through `--ip`.
+
+To keep an existing RSA key:
+
+```sh
+ssl-toolbox csr create --cn server.example.org --dns server.example.org \
+  --key existing.key --out-dir requests --name server
+
+ssl-toolbox csr create --cn server.example.org --dns server.example.org \
+  --key encrypted.key --key-pass-file "$KEY_PASSWORD_FILE" \
+  --out-dir requests --name encrypted-server
+```
+
+`--key` writes only the CSR; it neither modifies nor copies the original key.
+The key must be RSA with at least 2048 bits. PEM/DER PKCS#1 and PKCS#8 are
+supported, including encrypted PKCS#8 and legacy encrypted PEM. Use
+`--key-pass-env KEY_PASSWORD` or `--key-pass-file <path>` when necessary for
+noninteractive runs. `--key` and `--bits` are mutually exclusive.
+
+Inspect the request before sending it to the CA:
+
+```sh
+ssl-toolbox inspect certificates/server.csr
+ssl-toolbox inspect certificates/server.csr --json
+ssl-toolbox inspect certificates/server.csr --pdf request-report.pdf
+```
+
+Inspection supports PEM (including `NEW CERTIFICATE REQUEST`) and DER CSR.
+It shows the Subject, public key, SANs, signature algorithm, signature verification
+and SHA-256 fingerprint. Failed signatures are explicitly marked; this is metadata
+and does not change the inspection exit code. A CSR has no expiry dates and is
+not an issued certificate. Its signature does not establish ownership of names.
+Send **only the CSR** to the CA; keep the private key locally.
+
+## Batch CSR generation from YAML
+
+```sh
+ssl-toolbox csr batch --config requests.yaml --out-dir certificates --dry-run
+ssl-toolbox csr batch --config requests.yaml --out-dir certificates
+```
+
+A complete sample is in [examples/csr-batch.yaml](examples/csr-batch.yaml).
+One request creates one private key and one CSR, with any number of DNS/IP SANs:
+
+```yaml
+defaults:
+  rsaBits: 4096
+  subject:
+    country: CZ
+    organization: Example
+    organizationalUnit: WEB
+    email: admin@example.org
+requests:
+  - name: frontend
+    subject:
+      commonName: frontend.example.org
+    san:
+      dns: [frontend.example.org, frontend, portal.example.org]
+      ip: [192.0.2.10]
+  - name: backend
+    subject:
+      commonName: backend.example.org
+      organizationalUnit: ""
+    san:
+      dns: [backend.example.org, backend]
+      ip: [192.0.2.20, "2001:db8::20"]
+```
+
+This produces `frontend.key`, `frontend.csr`, `backend.key` and `backend.csr`
+in the selected output directory. Request `name` and `subject.commonName` are
+required. Names are filename basenames and must be unique ignoring case to
+avoid collisions across platforms. Unlike `csr create`, batch names are not
+inferred from CN. Wildcard CNs are allowed with a normal filename name.
+
+Subject fields (`country`, `province`, `locality`, `organization`,
+`organizationalUnit`, `email`) inherit from `defaults.subject`; each request
+may override them. An explicit empty string clears an inherited field.
+`commonName` must be specified per request. `rsaBits` defaults to 4096 and
+can be overridden per request for new keys. SANs are explicit per request;
+there are no shared SAN defaults and CN is never implicitly added to SAN.
+DNS/IP validation and deduplication are the same as `csr create`.
+
+To reuse an existing key, add this to a request instead of its `rsaBits`:
+
+```yaml
+    key:
+      file: keys/server.key
+      passwordEnv: KEY_PASSWORD
+      # Alternatively: passwordFile: secrets/key-password
+```
+
+Reusing a key creates only the CSR. `key.file` and `key.passwordFile` are
+relative to the YAML file's directory; absolute paths also work. `passwordEnv`
+is the name of an environment variable containing the password. Choose either
+ENV or FILE and omit password fields for unencrypted keys. Literal passwords
+are not supported in YAML. Defaults for key size apply only when generating
+a new key; request-level `rsaBits` cannot be combined with `key`.
+
+The YAML must contain exactly one document. Unknown fields, duplicate mapping
+keys, duplicate request names, aliases, merge keys and null values are rejected.
+Omit a field to inherit it or use an explicit empty string to clear it.
+The entire batch is prepared before any RSA generation or writes: effective
+Subjects/SANs, key sizes, existing RSA keys/passwords and output collisions
+are checked. Existing keys are read and cached during preparation.
+`--dry-run` performs the same checks and prints the resolved plan without
+creating directories, files or new keys. An encrypted input key can still
+require a password during dry-run; use ENV/FILE in CI.
+
+`--out-dir` is relative to the current working directory. Existing outputs are
+errors, even during dry-run; requests are not silently skipped. Generation
+runs sequentially. If generation or writing fails after preparation, processing
+stops and the error lists completed requests; their files remain. This is not
+an atomic transaction for the entire batch. Review the partial output, then
+use a new directory or a config containing only unfinished requests.
+This command generates CSRs; CA responses and PFX packaging remain separate.
+
+## Package the issued certificate into PFX
+
+When the CA returns the signed certificate and, if applicable, issuer certificates:
+
+```sh
+ssl-toolbox pfx create \
+  --key certificates/server.key --cert issued.pem \
+  --chain intermediate.pem --chain root.pem \
+  --out certificates/server.pfx
+
+ssl-toolbox inspect certificates/server.pfx
+```
+
+`--cert` accepts exactly one X.509 certificate in PEM or DER, regardless of its
+filename extension. `--chain` accepts repeatable CA PEM files or bundles; their
+order does not matter. Issuers are ordered using names and signatures, and
+duplicates are removed. Unrelated CA certificates and ambiguous chains are
+rejected. The issuer chain is optional; packaging does not validate trust,
+certificate dates or revocation. Always check the **issued** certificate with
+`inspect`, because the CA may change the names or usages requested in the CSR.
+
+The private key must match the issued certificate. Modern PFX uses AES-256 and
+SHA-256, with the same nonempty password protecting the private key and PFX.
+Password prompts ask for confirmation; in CI, provide ENV or FILE sources:
+
+```sh
+ssl-toolbox pfx create --key certificates/server.key --cert issued.cer \
+  --chain ca-chain.pem --out certificates/server.pfx --out-pass-env PFX_PASSWORD
+
+ssl-toolbox pfx create --key encrypted.key --key-pass-file "$KEY_PASSWORD_FILE" \
+  --cert issued.pem --out encrypted-identity.pfx --out-pass-file "$PFX_PASSWORD_FILE"
+```
+
+`pfx create` also accepts supported EC/Ed25519 private keys. Existing encrypted
+keys use separate `--key-pass-env` / `--key-pass-file` options. Existing outputs
+are never overwritten; the parent directory of `--out` must already exist.
+Use `convert --format jks` afterward if the application needs a real JKS store.
 
 ## Convert a PFX identity
 
@@ -251,6 +445,8 @@ Every password source supports ENV and FILE:
 | `convert`, input | `--in-pass-env` | `--in-pass-file` |
 | `convert` / `truststore`, new password | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, store / encrypted PEM or DER | `--pass-env` | `--pass-file` |
+| `csr create` / `pfx create`, existing encrypted key | `--key-pass-env` | `--key-pass-file` |
+| `pfx create`, new PFX/key password | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, separate JKS key password | `--key-pass-env` | `--key-pass-file` |
 | `extract`, input PFX | `--pass-env` | `--pass-file` |
 

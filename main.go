@@ -104,21 +104,9 @@ func convertFile(options conversionOptions, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	newPassword, err := readPasswordSource(*outEnv, options.outPassFile, "New keystore/key password: ", stderr)
+	newPassword, err := readNewPassword(*outEnv, options.outPassFile, stderr)
 	if err != nil {
 		return err
-	}
-	if newPassword == "" {
-		return errors.New("new password must not be empty")
-	}
-	if *outEnv == "" && options.outPassFile == "" {
-		confirmation, err := password("", "Confirm new password: ", stderr)
-		if err != nil {
-			return err
-		}
-		if confirmation != newPassword {
-			return errors.New("new passwords do not match")
-		}
 	}
 	converted, err := convertWithCAs(data, oldPassword, newPassword, *format, *alias, addedCAs)
 	if err != nil {
@@ -129,6 +117,26 @@ func convertFile(options conversionOptions, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "Created %s (%s; added %d trusted CA certificates).\n", *out, strings.ToUpper(*format), len(addedCAs))
 	return nil
+}
+
+func readNewPassword(env, file string, stderr io.Writer) (string, error) {
+	value, err := readPasswordSource(env, file, "New keystore/key password: ", stderr)
+	if err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", errors.New("new password must not be empty")
+	}
+	if env == "" && file == "" {
+		confirmation, err := password("", "Confirm new password: ", stderr)
+		if err != nil {
+			return "", err
+		}
+		if confirmation != value {
+			return "", errors.New("new passwords do not match")
+		}
+	}
+	return value, nil
 }
 
 func password(env, prompt string, stderr io.Writer) (string, error) {

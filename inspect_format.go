@@ -51,7 +51,11 @@ func printInspectionColored(w io.Writer, report *inspectionReport, color bool) e
 		integrityCode = "32"
 	}
 	field("", "Integrity", paint(report.Integrity, integrityCode))
-	field("", "Entries", fmt.Sprintf("%d (certificates: %d; private keys: %d; public keys: %d)", report.EntryCount, report.CertificateCount, report.PrivateKeyCount, report.PublicKeyCount))
+	counts := fmt.Sprintf("certificates: %d; private keys: %d; public keys: %d", report.CertificateCount, report.PrivateKeyCount, report.PublicKeyCount)
+	if report.RequestCount > 0 {
+		counts += fmt.Sprintf("; CSRs: %d", report.RequestCount)
+	}
+	field("", "Entries", fmt.Sprintf("%d (%s)", report.EntryCount, counts))
 	expired, soon, future := 0, 0, 0
 	for _, e := range report.Entries {
 		if e.Certificate != nil {
@@ -65,7 +69,9 @@ func printInspectionColored(w io.Writer, report *inspectionReport, color bool) e
 			}
 		}
 	}
-	field("", "Certificate dates", fmt.Sprintf("%s; %s; %s", paint(fmt.Sprintf("%d EXPIRED", expired), statusCountColor(expired, "1;31")), paint(fmt.Sprintf("%d EXPIRING SOON (within %d days)", soon, report.ExpiryWarningDays), statusCountColor(soon, "1;33")), paint(fmt.Sprintf("%d NOT YET VALID", future), statusCountColor(future, "1;33"))))
+	if report.RequestCount == 0 || report.CertificateCount > 0 {
+		field("", "Certificate dates", fmt.Sprintf("%s; %s; %s", paint(fmt.Sprintf("%d EXPIRED", expired), statusCountColor(expired, "1;31")), paint(fmt.Sprintf("%d EXPIRING SOON (within %d days)", soon, report.ExpiryWarningDays), statusCountColor(soon, "1;33")), paint(fmt.Sprintf("%d NOT YET VALID", future), statusCountColor(future, "1;33"))))
+	}
 	if report.MAC != nil {
 		field("", "MAC/digest", protectionText(*report.MAC))
 	}
@@ -102,6 +108,18 @@ func printInspectionColored(w io.Writer, report *inspectionReport, color bool) e
 		}
 		if len(entry.Matches) > 0 {
 			field("  ", "Matching entries", paint(strings.Join(entry.Matches, ", "), "1;35"))
+		}
+		if request := entry.Request; request != nil {
+			field("  ", "Subject", paint(request.Subject, "1"))
+			field("  ", "CSR version", fmt.Sprint(request.Version))
+			field("  ", "Signature", request.SignatureAlgorithm)
+			status, code := "VERIFIED", "32"
+			if !request.SignatureValid {
+				status, code = "FAILED: "+request.SignatureError, "1;31"
+			}
+			field("  ", "CSR signature", paint(status, code))
+			field("  ", "CSR SHA-256", paint(request.SHA256, "2"))
+			field("  ", "SAN", strings.Join(request.SAN, ", "))
 		}
 		if cert := entry.Certificate; cert != nil {
 			field("  ", "Subject", paint(cert.Subject, "1"))
@@ -153,7 +171,12 @@ func printInspectionColored(w io.Writer, report *inspectionReport, color bool) e
 			}
 		}
 	}
-	fmt.Fprintln(&out, "\n"+paint("Certificate date status does not verify a chain against a trusted root or check revocation.", "2"))
+	if report.RequestCount > 0 {
+		fmt.Fprintln(&out, "\n"+paint("A CSR is a signing request, not an issued certificate; it has no validity dates. Its signature does not verify ownership of the requested names.", "2"))
+	}
+	if report.RequestCount == 0 || report.CertificateCount > 0 {
+		fmt.Fprintln(&out, "\n"+paint("Certificate date status does not verify a chain against a trusted root or check revocation.", "2"))
+	}
 	_, err := io.Copy(w, &out)
 	return err
 }

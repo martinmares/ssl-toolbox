@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -37,6 +39,7 @@ type inspectionReport struct {
 	CertificateCount  int                 `json:"certificate_count"`
 	PrivateKeyCount   int                 `json:"private_key_count"`
 	PublicKeyCount    int                 `json:"public_key_count"`
+	RequestCount      int                 `json:"certificate_request_count,omitempty"`
 	Entries           []inspectionEntry   `json:"entries"`
 }
 
@@ -49,7 +52,18 @@ type inspectionEntry struct {
 	Protection  *pkcs12.Protection  `json:"protection,omitempty"`
 	PublicKey   *publicKeyDetails   `json:"public_key,omitempty"`
 	Certificate *certificateDetails `json:"certificate,omitempty"`
+	Request     *requestDetails     `json:"certificate_request,omitempty"`
 	Matches     []string            `json:"matching_entries,omitempty"`
+}
+
+type requestDetails struct {
+	Subject            string   `json:"subject"`
+	Version            int      `json:"version"`
+	SignatureAlgorithm string   `json:"signature_algorithm"`
+	SignatureValid     bool     `json:"signature_valid"`
+	SignatureError     string   `json:"signature_error,omitempty"`
+	SHA256             string   `json:"sha256"`
+	SAN                []string `json:"subject_alt_names"`
 }
 
 type publicKeyDetails struct {
@@ -106,7 +120,7 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 	var pdfPath string
 	colorMode := "auto"
 	expiryDays := 30
-	cmd := &cobra.Command{Use: "inspect <file>", Short: "Identify and inspect every certificate and key without printing private material", Args: cobra.ExactArgs(1),
+	cmd := &cobra.Command{Use: "inspect <file>", Short: "Identify and inspect certificates, keys and CSRs without printing private material", Args: cobra.ExactArgs(1),
 		Example: "  ssl-toolbox inspect client.pfx\n  ssl-toolbox inspect truststore.jks --pass-env STORE_PASSWORD\n  ssl-toolbox inspect ca-bundle.pem --json\n  ssl-toolbox inspect client.pfx --pdf inspection.pdf",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
@@ -220,6 +234,10 @@ func inspectContents(data []byte, pass, keyPass *inspectPassword) (*inspectionRe
 					return nil, err
 				}
 			}
+		} else if request, err := x509.ParseCertificateRequest(data); err == nil {
+			if err := addCertificateRequest(report, request); err != nil {
+				return nil, err
+			}
 		} else if key, err := parsePrivateKey(data); err == nil {
 			if err := addPrivateKey(report, inspectionEntry{Type: "private key"}, key); err != nil {
 				return nil, err
@@ -237,7 +255,7 @@ func inspectContents(data []byte, pass, keyPass *inspectPassword) (*inspectionRe
 				return nil, err
 			}
 		} else {
-			return nil, errors.New("unrecognized or unsupported file content (expected PFX, JKS, PEM or DER certificate/key)")
+			return nil, errors.New("unrecognized or unsupported file content (expected PFX, JKS, PEM or DER certificate/key/CSR)")
 		}
 	}
 	report.EntryCount = len(report.Entries)
@@ -250,6 +268,8 @@ func inspectContents(data []byte, pass, keyPass *inspectPassword) (*inspectionRe
 			report.PrivateKeyCount++
 		case "public key":
 			report.PublicKeyCount++
+		case "certificate request":
+			report.RequestCount++
 		}
 	}
 	// Match by canonical SPKI fingerprint, not only alias/localKeyId metadata.
@@ -260,7 +280,7 @@ func inspectContents(data []byte, pass, keyPass *inspectPassword) (*inspectionRe
 		}
 		for j := range report.Entries {
 			other := report.Entries[j]
-			if i != j && other.PublicKey != nil && other.PublicKey.SHA256 == entry.PublicKey.SHA256 && (entry.Certificate != nil) != (other.Certificate != nil) {
+			if i != j && other.PublicKey != nil && other.PublicKey.SHA256 == entry.PublicKey.SHA256 && (entry.Certificate != nil || entry.Request != nil) != (other.Certificate != nil || other.Request != nil) {
 				entry.Matches = append(entry.Matches, other.ID)
 			}
 		}
@@ -463,6 +483,14 @@ func inspectPEM(data []byte, report *inspectionReport, pass *inspectPassword) er
 			entry.Protection = &pkcs12.Protection{Algorithm: "legacy PEM", Cipher: cipherName}
 		}
 		switch block.Type {
+		case "CERTIFICATE REQUEST", "NEW CERTIFICATE REQUEST":
+			request, err := x509.ParseCertificateRequest(der)
+			if err != nil {
+				return fmt.Errorf("parse PEM CSR: %w", err)
+			}
+			if err := addCertificateRequest(report, request); err != nil {
+				return err
+			}
 		case "CERTIFICATE", "X509 CERTIFICATE":
 			certs, err := x509.ParseCertificates(der)
 			if err != nil {
@@ -639,23 +667,44 @@ func addCertificate(report *inspectionReport, entry inspectionEntry, cert *x509.
 	for _, oid := range cert.UnknownExtKeyUsage {
 		detail.ExtendedKeyUsage = append(detail.ExtendedKeyUsage, oid.String())
 	}
-	for _, name := range cert.DNSNames {
-		detail.SAN = append(detail.SAN, "DNS:"+name)
-	}
-	for _, name := range cert.EmailAddresses {
-		detail.SAN = append(detail.SAN, "email:"+name)
-	}
-	for _, ip := range cert.IPAddresses {
-		detail.SAN = append(detail.SAN, "IP:"+ip.String())
-	}
-	for _, uri := range cert.URIs {
-		detail.SAN = append(detail.SAN, "URI:"+uri.String())
-	}
+	detail.SAN = inspectionAlternativeNames(cert.DNSNames, cert.EmailAddresses, cert.IPAddresses, cert.URIs)
 	for _, oid := range cert.UnhandledCriticalExtensions {
 		detail.UnhandledCriticalExtensions = append(detail.UnhandledCriticalExtensions, oid.String())
 	}
 	entry.Certificate = detail
 	report.Entries = append(report.Entries, entry)
+	return nil
+}
+
+func inspectionAlternativeNames(dns, emails []string, ips []net.IP, uris []*url.URL) []string {
+	names := []string{}
+	for _, name := range dns {
+		names = append(names, "DNS:"+name)
+	}
+	for _, name := range emails {
+		names = append(names, "email:"+name)
+	}
+	for _, ip := range ips {
+		names = append(names, "IP:"+ip.String())
+	}
+	for _, uri := range uris {
+		names = append(names, "URI:"+uri.String())
+	}
+	return names
+}
+
+func addCertificateRequest(report *inspectionReport, request *x509.CertificateRequest) error {
+	key, err := keyDetails(request.PublicKey)
+	if err != nil {
+		return err
+	}
+	detail := &requestDetails{Subject: request.Subject.String(), Version: request.Version, SignatureAlgorithm: request.SignatureAlgorithm.String(), SHA256: fmt.Sprintf("%x", sha256.Sum256(request.Raw)), SAN: inspectionAlternativeNames(request.DNSNames, request.EmailAddresses, request.IPAddresses, request.URIs)}
+	if err := request.CheckSignature(); err != nil {
+		detail.SignatureError = err.Error()
+	} else {
+		detail.SignatureValid = true
+	}
+	report.Entries = append(report.Entries, inspectionEntry{Type: "certificate request", PublicKey: key, Request: detail})
 	return nil
 }
 

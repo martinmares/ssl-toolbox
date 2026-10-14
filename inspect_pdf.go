@@ -36,7 +36,7 @@ func writeInspectionPDF(path string, report *inspectionReport) error {
 	pdf.SetHeaderFunc(func() {
 		pdf.SetFont("Go", "B", 16)
 		pdf.SetTextColor(20, 65, 85)
-		pdf.CellFormat(180, 8, "Certificate and key inspection", "", 1, "", false, 0, "")
+		pdf.CellFormat(180, 8, "Certificate, key and CSR inspection", "", 1, "", false, 0, "")
 		pdf.SetFont("Go", "", 8)
 		pdf.SetTextColor(100, 100, 100)
 		pdf.CellFormat(180, 5, "ssl-toolbox | Generated "+generated, "", 1, "", false, 0, "")

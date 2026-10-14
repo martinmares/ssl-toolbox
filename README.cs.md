@@ -27,7 +27,10 @@ go build -o ssl-toolbox .
 | `convert` | Převod existující identity nebo truststore z PKCS#12 na moderní PFX či JKS, případně přidání CA |
 | `truststore` | Vytvoření čistého PFX/JKS truststore z CA PEM souborů |
 | `configmap set-binary` | Nahrazení položky `binaryData` obsahem souboru zakódovaným do base64 |
-| `inspect` | Rozpoznání formátu podle obsahu a výpis všech certifikátů a klíčů; také JSON |
+| `csr create` | Vytvoření RSA/SHA-256 CSR a klíče nebo použití existujícího RSA klíče |
+| `csr batch` | Kontrola a generování více CSR podle YAML; podpora dry-run |
+| `pfx create` | Zabalení klíče, vydaného certifikátu a případného CA řetězce do moderního PFX |
+| `inspect` | Rozpoznání certifikátů, klíčů a CSR podle obsahu; text, JSON nebo PDF |
 | `extract` | Export klíče, certifikátu a dostupného CA řetězce z PFX do PEM souborů |
 | `configmap extract-binary` | Obnova přesných binárních bajtů z klíče `binaryData` do nového souboru |
 | `examples` | Přehled variant příkazů s vysvětlením a barevnými ukázkami |
@@ -67,7 +70,7 @@ just version         # obsah VERSION
 | `notices` | Obnovení licenčního přehledu závislostí všech release platforem |
 | `upgrade-modules` | Aktualizace externích Go modulů, checksums a notices, kontroly a lokální build |
 
-`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.2.0`.
+`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.3.0`.
 Před vydáním uprav číslo v tomto souboru a spusť `just check` a `just build-all`.
 Běžný `go build` také obsahuje verzi díky `go:embed`. Just buildy navíc přes
 linker vloží krátký Git commit a UTC čas sestavení. Bez Git repozitáře nebo
@@ -144,6 +147,194 @@ jako `1.0.2-rc.1` se označí jako prerelease.
 Pro stejnou verzi na GitHubu i obou GitLab serverech pushni stejný commit se změnou
 `VERSION` do všech repozitářů. Každý server vydá vlastní release z tohoto commitu.
 Lokální build úlohy nic nepublikují.
+
+## Vytvoření žádosti o certifikát (CSR)
+
+```sh
+ssl-toolbox csr create \
+  --cn server.example.org --email admin@example.org \
+  --country CZ --province "Czech Republic" --locality Prague \
+  --organization Example --organizational-unit WEB \
+  --sans-file dns-names.txt --ip 192.0.2.10 --ip 2001:db8::10 \
+  --out-dir certificates --name server
+```
+
+`--out-dir` je adresář, který se podle potřeby vytvoří. `--name` je základ názvu
+souborů bez přípony a standardně přebírá CN. Příklad vytvoří
+`certificates/server.key` a `certificates/server.csr`. Existující soubory se
+nepřepisují. Nové adresáře mají práva 0700 a soubory 0600. Klíč je
+**nešifrovaný PKCS#8 PEM**, standardně RSA 4096; `--bits` podporuje 2048, 3072,
+4096 a 8192. CSR se podepisuje SHA-256. OpenSSL se nespouští.
+
+Povinné jsou CN a výstupní adresář. Ostatní položky Subject jsou volitelné;
+`--email` nastavuje emailAddress v Subject, nikoliv e-mailový SAN. Organizace
+ani lokalita nemají přednastavené hodnoty a konfigurace OpenSSL není potřeba.
+`--country` přijímá dvě ASCII písmena a převede je na velká.
+
+DNS soubor obsahuje jedno jméno na řádku:
+
+```text
+# Požadované aliasy
+server.example.org
+server
+```
+
+Prázdné řádky a komentáře za `#`, včetně komentářů na konci řádku, se ignorují.
+Opakovatelný `--dns` přidává DNS SAN, `--ip` adresy IPv4/IPv6. Lze je kombinovat
+s `--sans-file`; duplicity se odstraní. DNS jména používají ASCII nebo punycode.
+Podporuje se `*.example.org`, wildcard smí být pouze prvním labelem. Pro wildcard
+CN zadej explicitní `--name`. **CN se automaticky nepřidává do SAN**: všechna
+požadovaná DNS jména uveď přes `--dns` nebo soubor, IP adresy přes `--ip`.
+
+Použití existujícího RSA klíče:
+
+```sh
+ssl-toolbox csr create --cn server.example.org --dns server.example.org \
+  --key existing.key --out-dir requests --name server
+
+ssl-toolbox csr create --cn server.example.org --dns server.example.org \
+  --key encrypted.key --key-pass-file "$KEY_PASSWORD_FILE" \
+  --out-dir requests --name encrypted-server
+```
+
+S `--key` vznikne pouze CSR; původní klíč se nemění ani nekopíruje. Musí jít o RSA
+alespoň 2048 bitů. Podporuje se PEM/DER PKCS#1 a PKCS#8, včetně šifrovaného PKCS#8
+a staršího šifrovaného PEM. Pro neinteraktivní běh použij podle potřeby
+`--key-pass-env KEY_PASSWORD` nebo `--key-pass-file <cesta>`.
+`--key` a `--bits` nelze kombinovat.
+
+Žádost před odesláním CA zkontroluj:
+
+```sh
+ssl-toolbox inspect certificates/server.csr
+ssl-toolbox inspect certificates/server.csr --json
+ssl-toolbox inspect certificates/server.csr --pdf request-report.pdf
+```
+
+Inspekce podporuje CSR v PEM (také `NEW CERTIFICATE REQUEST`) i DER. Zobrazí
+Subject, veřejný klíč, SAN, algoritmus a ověření podpisu i SHA-256 otisk. Chybný
+podpis se výslovně označí; jde o metadata a nemění návratový kód inspekce.
+CSR nemá datum expirace a není vydaný certifikát. Jeho podpis nepotvrzuje
+vlastnictví požadovaných jmen. CA pošli **jen CSR**, privátní klíč zůstává u tebe.
+
+## Dávkové generování CSR z YAML
+
+```sh
+ssl-toolbox csr batch --config requests.yaml --out-dir certificates --dry-run
+ssl-toolbox csr batch --config requests.yaml --out-dir certificates
+```
+
+Úplná ukázka je v [examples/csr-batch.yaml](examples/csr-batch.yaml).
+Jedna položka vytvoří jeden privátní klíč a jednu CSR s libovolným počtem DNS/IP SAN:
+
+```yaml
+defaults:
+  rsaBits: 4096
+  subject:
+    country: CZ
+    organization: Example
+    organizationalUnit: WEB
+    email: admin@example.org
+requests:
+  - name: frontend
+    subject:
+      commonName: frontend.example.org
+    san:
+      dns: [frontend.example.org, frontend, portal.example.org]
+      ip: [192.0.2.10]
+  - name: backend
+    subject:
+      commonName: backend.example.org
+      organizationalUnit: ""
+    san:
+      dns: [backend.example.org, backend]
+      ip: [192.0.2.20, "2001:db8::20"]
+```
+
+Ve výstupním adresáři vzniknou `frontend.key`, `frontend.csr`, `backend.key`
+a `backend.csr`. Povinné jsou `name` a `subject.commonName` u každé žádosti.
+Jména jsou základy názvů souborů a musí být unikátní bez ohledu na velikost
+písmen, aby nekolidovala na různých platformách. Oproti `csr create` se název
+neodvozuje z CN. Wildcard CN lze použít s běžným názvem souboru.
+
+Položky Subject (`country`, `province`, `locality`, `organization`,
+`organizationalUnit`, `email`) se dědí z `defaults.subject` a jednotlivé
+žádosti je mohou přepsat. Explicitní prázdný řetězec zděděnou položku odstraní.
+`commonName` musí být uvedené přímo v žádosti. `rsaBits` je standardně 4096
+s možností přepsání u žádosti pro nový klíč. SAN jsou vždy explicitní pro
+konkrétní žádost; společné výchozí SAN nejsou podporované a CN se do SAN
+nepřidává automaticky. Validace a odstranění duplicit jsou stejné jako u `csr create`.
+
+Pro opětovné použití klíče přidej do žádosti místo jejího `rsaBits`:
+
+```yaml
+    key:
+      file: keys/server.key
+      passwordEnv: KEY_PASSWORD
+      # Alternativně: passwordFile: secrets/key-password
+```
+
+S existujícím klíčem vznikne pouze CSR. Cesty `key.file` a `key.passwordFile`
+jsou relativní k adresáři YAML souboru; lze použít i absolutní cestu.
+`passwordEnv` je název proměnné s heslem. Zvol ENV nebo FILE, u nešifrovaného
+klíče heslo vynech. Přímý zápis hesla do YAML není podporovaný. Výchozí počet
+bitů se používá jen pro nové klíče; `rsaBits` přímo u žádosti nelze kombinovat s `key`.
+
+YAML musí obsahovat právě jeden dokument. Neznámá pole, duplicitní klíče map,
+duplicitní názvy žádostí, aliasy, merge klíče a hodnoty null se odmítají.
+Pro dědění položku vynech, pro odstranění použij explicitní prázdný řetězec.
+Celá dávka se připraví před generováním RSA nebo zápisem: ověří se výsledné
+Subject/SAN, velikosti klíčů, existující RSA klíče a hesla i kolize výstupů.
+Existující klíče se v této fázi načtou a uchovají pro generování.
+`--dry-run` provede stejné kontroly a vypíše výsledný plán bez tvorby adresářů,
+souborů nebo nových klíčů. U šifrovaného vstupního klíče může i dry-run
+vyžadovat heslo; v CI jej předej přes ENV/FILE.
+
+`--out-dir` je relativní k pracovnímu adresáři. Existující výstupy jsou chyba
+i při dry-run; žádosti se automaticky nepřeskakují. Generování běží postupně.
+Pokud po přípravě nastane chyba při generování nebo zápisu, dávka se zastaví
+a chyba vypíše dokončené žádosti; jejich soubory zůstanou. Celá dávka není
+atomická transakce. Částečný výsledek zkontroluj, potom použij nový adresář
+nebo konfiguraci jen s nedokončenými žádostmi. Příkaz generuje CSR; odpovědi CA
+a balení do PFX jsou samostatné kroky.
+
+## Zabalení vydaného certifikátu do PFX
+
+Až CA pošle podepsaný certifikát a případně certifikáty vydavatelů:
+
+```sh
+ssl-toolbox pfx create \
+  --key certificates/server.key --cert issued.pem \
+  --chain intermediate.pem --chain root.pem \
+  --out certificates/server.pfx
+
+ssl-toolbox inspect certificates/server.pfx
+```
+
+`--cert` přijímá právě jeden X.509 certifikát v PEM nebo DER bez ohledu na příponu
+souboru. Opakovatelný `--chain` přijímá CA PEM soubory nebo balíčky, na pořadí
+nezáleží. Vydavatelé se seřadí podle jmen a podpisů a duplicity se odstraní.
+Nesouvisející CA a nejednoznačné řetězce se odmítnou. CA řetězec je volitelný;
+balení neověřuje důvěryhodnost, platnost podle data ani revokaci. Přes `inspect`
+vždy zkontroluj také **vydaný** certifikát: CA může změnit jména nebo použití
+požadovaná v CSR.
+
+Privátní klíč musí odpovídat vydanému certifikátu. Moderní PFX používá AES-256
+a SHA-256 se stejným neprázdným heslem pro PFX i klíč. Interaktivně se heslo
+potvrzuje; v CI ho předej přes ENV nebo FILE:
+
+```sh
+ssl-toolbox pfx create --key certificates/server.key --cert issued.cer \
+  --chain ca-chain.pem --out certificates/server.pfx --out-pass-env PFX_PASSWORD
+
+ssl-toolbox pfx create --key encrypted.key --key-pass-file "$KEY_PASSWORD_FILE" \
+  --cert issued.pem --out encrypted-identity.pfx --out-pass-file "$PFX_PASSWORD_FILE"
+```
+
+`pfx create` přijímá také podporované EC/Ed25519 klíče. Pro existující šifrovaný
+klíč slouží samostatné `--key-pass-env` / `--key-pass-file`. Existující výstupy
+se nepřepisují; rodičovský adresář `--out` musí existovat. Pokud aplikace potřebuje
+skutečné JKS, výsledné PFX převeď příkazem `convert --format jks`.
 
 ## Převod klientského PFX
 
@@ -250,6 +441,8 @@ Každý zdroj hesla má variantu ENV i FILE:
 | `convert`, vstup | `--in-pass-env` | `--in-pass-file` |
 | `convert` / `truststore`, nové heslo | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, úložiště / šifrovaný PEM nebo DER | `--pass-env` | `--pass-file` |
+| `csr create` / `pfx create`, existující šifrovaný klíč | `--key-pass-env` | `--key-pass-file` |
+| `pfx create`, nové heslo PFX/klíče | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, samostatné heslo JKS klíče | `--key-pass-env` | `--key-pass-file` |
 | `extract`, vstupní PFX | `--pass-env` | `--pass-file` |
 

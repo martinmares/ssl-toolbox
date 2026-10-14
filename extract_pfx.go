@@ -160,20 +160,37 @@ func selectPFXIdentity(info *pkcs12.Inspection, entryID, certID string) (any, *x
 // Follow only issuers present in the PFX, checking names and signatures rather
 // than trusting bag order. No network lookup or trust/date validation is done.
 func extractPFXChain(cert *x509.Certificate, info *pkcs12.Inspection) ([]byte, error) {
-	seen := map[string]bool{string(cert.Raw): true}
+	var candidates []*x509.Certificate
+	for _, entry := range info.Entries {
+		if entry.Certificate != nil {
+			candidates = append(candidates, entry.Certificate)
+		}
+	}
+	certs, err := buildCertificateChain(cert, candidates)
+	if err != nil {
+		return nil, err
+	}
 	var chain []byte
+	for _, cert := range certs {
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})...)
+	}
+	return chain, nil
+}
+
+func buildCertificateChain(cert *x509.Certificate, candidates []*x509.Certificate) ([]*x509.Certificate, error) {
+	seen := map[string]bool{string(cert.Raw): true}
+	var chain []*x509.Certificate
 	for {
 		if bytes.Equal(cert.RawIssuer, cert.RawSubject) && cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature) == nil {
 			return chain, nil
 		}
 		var issuer *x509.Certificate
-		for _, entry := range info.Entries {
-			candidate := entry.Certificate
+		for _, candidate := range candidates {
 			if candidate == nil || !bytes.Equal(cert.RawIssuer, candidate.RawSubject) || cert.CheckSignatureFrom(candidate) != nil {
 				continue
 			}
 			if issuer != nil && !bytes.Equal(issuer.Raw, candidate.Raw) {
-				return nil, errors.New("multiple possible CA chains in PFX; issuer selection is ambiguous")
+				return nil, errors.New("multiple possible CA chains; issuer selection is ambiguous")
 			}
 			issuer = candidate
 		}
@@ -181,10 +198,10 @@ func extractPFXChain(cert *x509.Certificate, info *pkcs12.Inspection) ([]byte, e
 			return chain, nil
 		}
 		if seen[string(issuer.Raw)] {
-			return nil, errors.New("certificate chain in PFX contains a cycle")
+			return nil, errors.New("certificate chain contains a cycle")
 		}
 		seen[string(issuer.Raw)] = true
-		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Raw})...)
+		chain = append(chain, issuer)
 		cert = issuer
 	}
 }
