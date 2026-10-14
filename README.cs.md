@@ -67,7 +67,7 @@ just version         # obsah VERSION
 | `notices` | Obnovení licenčního přehledu závislostí všech release platforem |
 | `upgrade-modules` | Aktualizace externích Go modulů, checksums a notices, kontroly a lokální build |
 
-`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.0.2`.
+`VERSION` je jediný výchozí zdroj verze; aktuální verze je `1.2.0`.
 Před vydáním uprav číslo v tomto souboru a spusť `just check` a `just build-all`.
 Běžný `go build` také obsahuje verzi díky `go:embed`. Just buildy navíc přes
 linker vloží krátký Git commit a UTC čas sestavení. Bez Git repozitáře nebo
@@ -435,6 +435,28 @@ neplatná položka nebo chyba dešifrování ukončí příkaz bez částečnéh
 PEM přijímá bílé znaky a metadata exportů OpenSSL (`Bag Attributes`,
 `Key Attributes`, `subject=`, `issuer=`) před bloky i mezi nimi.
 Jiný text mimo PEM bloky se odmítá.
+
+### PDF report
+
+```sh
+ssl-toolbox inspect client.pfx --pdf inspection.pdf
+ssl-toolbox inspect client.jks --pass-file "$STORE_PASSWORD_FILE" \
+  --expiry-warning-days 60 --pdf keystore-report.pdf
+```
+
+`--pdf <soubor>` uloží barevný report A4 místo metadat v terminálu. Obsahuje
+všechny položky, stejné detaily a varování jako textový výpis, UTC čas vytvoření
+a čísla stránek. Dlouhé hodnoty se zalamují přes řádky a stránky. Fonty jsou
+vložené do PDF a podporují českou diakritiku; jejich licence je přílohou PDF.
+Export nevyžaduje prohlížeč, externí PDF program ani systémové fonty a funguje
+i v CI. Volby pro hesla fungují stejně jako u textového výpisu. Hesla ani bajty
+privátních klíčů report neobsahuje. Existující soubory se nepřepisují; `--pdf`
+a `--json` nelze kombinovat. `--color` ovlivňuje jen terminál, PDF je vždy barevné.
+
+U expirace je také lidsky čitelný odhad, například
+`Expiry: in 989 days (about 2 years and 8 months)`. Platí k okamžiku inspekce;
+uložené PDF se postupem času neaktualizuje. Odhad počítá měsíc jako 30 dní
+a rok jako 365 dní. JSON nadále obsahuje přesný počet sekund.
 
 ### Barvy a expirace
 

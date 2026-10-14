@@ -37,6 +37,21 @@ func TestExpiryStatusBoundaries(t *testing.T) {
 	}
 }
 
+func TestApproximateExpiryDuration(t *testing.T) {
+	for _, tt := range []struct {
+		days int64
+		want string
+	}{
+		{7, "1 week"}, {14, "2 weeks"}, {30, "1 month"},
+		{180, "6 months"}, {365, "1 year"}, {395, "1 year and 1 month"},
+		{989, "2 years and 8 months"},
+	} {
+		if got := approximateExpiryDuration(tt.days); got != tt.want {
+			t.Errorf("%d days: got %q, want %q", tt.days, got, tt.want)
+		}
+	}
+}
+
 func TestInspectionColorsAndJSON(t *testing.T) {
 	_, cert, _ := fixture(t)
 	dir := t.TempDir()

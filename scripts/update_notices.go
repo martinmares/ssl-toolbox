@@ -89,6 +89,9 @@ func updateNotices() error {
 			return err
 		}
 	}
+	if err := appendLicenses(&result, "Go fonts (Bigelow & Holmes)", "", "assets/fonts"); err != nil {
+		return err
+	}
 	return os.WriteFile("THIRD_PARTY_NOTICES.md", []byte(strings.TrimRight(result.String(), "\n")+"\n"), 0644)
 }
 
@@ -107,7 +110,7 @@ func appendLicenses(w io.Writer, name, version, dir string) error {
 	if len(notices) == 0 {
 		return fmt.Errorf("no license found for %s in %s", name, dir)
 	}
-	fmt.Fprintf(w, "## %s %s\n\n", name, version)
+	fmt.Fprintf(w, "## %s\n\n", strings.TrimSpace(name+" "+version))
 	for _, file := range notices {
 		data, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil {

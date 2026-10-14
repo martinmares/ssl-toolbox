@@ -68,7 +68,7 @@ just version         # contents of VERSION
 | `upgrade-modules` | Upgrade external Go modules, refresh checksums/notices, check and build locally |
 
 `VERSION` is the single default source of the version; the current version is
-`1.0.2`. Before a release, edit this file, then run `just check` and
+`1.2.0`. Before a release, edit this file, then run `just check` and
 `just build-all`. A plain `go build` also contains the version through
 `go:embed`. Just builds additionally inject the short Git commit and UTC build
 time through linker flags. Without Git or linker metadata, commit/build time
@@ -436,6 +436,29 @@ by OID. Unsupported PEM blocks, malformed objects or decryption errors fail
 without a partial report. PEM accepts whitespace and OpenSSL export metadata
 (`Bag Attributes`, `Key Attributes`, `subject=`, `issuer=`) before and between
 blocks. Other text outside PEM blocks is rejected.
+
+### PDF report
+
+```sh
+ssl-toolbox inspect client.pfx --pdf inspection.pdf
+ssl-toolbox inspect client.jks --pass-file "$STORE_PASSWORD_FILE" \
+  --expiry-warning-days 60 --pdf keystore-report.pdf
+```
+
+`--pdf <file>` writes a colored A4 report instead of the terminal metadata.
+It includes every inspected entry, the same details and warnings as the text
+output, a UTC generation timestamp and page numbers. Long values wrap across
+lines and pages. Fonts are embedded, including support for Czech characters;
+their license is attached to the PDF. No browser, external PDF tool or system
+font installation is required, including in CI. Password options work as usual.
+Passwords and private key bytes are excluded. Existing files are never
+overwritten; `--pdf` and `--json` are mutually exclusive. `--color` affects
+terminal output only; PDF reports always use colors.
+
+Expiry includes an approximate human-readable duration, for example
+`Expiry: in 989 days (about 2 years and 8 months)`. These estimates apply at
+inspection time; a saved PDF does not update as time passes. Months use 30 days
+and years 365 days for this approximation. JSON retains exact seconds.
 
 ### Colors and expiration
 

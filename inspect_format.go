@@ -131,6 +131,13 @@ func printInspectionColored(w io.Writer, report *inspectionReport, color bool) e
 					expiry = "less than 1 day ago"
 				}
 			}
+			if days >= 7 {
+				duration := approximateExpiryDuration(days)
+				if cert.Validity == "expired" {
+					duration += " ago"
+				}
+				expiry += " (about " + duration + ")"
+			}
 			field("  ", "Expiry", paint(expiry, code))
 			field("  ", "Signature", cert.SignatureAlgorithm)
 			field("  ", "Certificate SHA-256", paint(cert.SHA256, "2"))
@@ -149,6 +156,26 @@ func printInspectionColored(w io.Writer, report *inspectionReport, color bool) e
 	fmt.Fprintln(&out, "\n"+paint("Certificate date status does not verify a chain against a trusted root or check revocation.", "2"))
 	_, err := io.Copy(w, &out)
 	return err
+}
+
+func approximateExpiryDuration(days int64) string {
+	plural := func(n int64, unit string) string {
+		if n != 1 {
+			unit += "s"
+		}
+		return fmt.Sprintf("%d %s", n, unit)
+	}
+	if days >= 365 {
+		text := plural(days/365, "year")
+		if months := (days % 365) / 30; months > 0 {
+			text += " and " + plural(months, "month")
+		}
+		return text
+	}
+	if days >= 30 {
+		return plural(days/30, "month")
+	}
+	return plural(days/7, "week")
 }
 
 func statusCountColor(count int, warning string) string {

@@ -103,12 +103,16 @@ func (p *inspectPassword) read(prompt string, refresh bool) (string, error) {
 func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 	var passEnv, keyPassEnv, passFile, keyPassFile string
 	var asJSON bool
+	var pdfPath string
 	colorMode := "auto"
 	expiryDays := 30
 	cmd := &cobra.Command{Use: "inspect <file>", Short: "Identify and inspect every certificate and key without printing private material", Args: cobra.ExactArgs(1),
-		Example: "  ssl-toolbox inspect client.pfx\n  ssl-toolbox inspect truststore.jks --pass-env STORE_PASSWORD\n  ssl-toolbox inspect ca-bundle.pem --json",
+		Example: "  ssl-toolbox inspect client.pfx\n  ssl-toolbox inspect truststore.jks --pass-env STORE_PASSWORD\n  ssl-toolbox inspect ca-bundle.pem --json\n  ssl-toolbox inspect client.pfx --pdf inspection.pdf",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
+			if cmd.Flags().Changed("pdf") && strings.TrimSpace(pdfPath) == "" {
+				return errors.New("--pdf requires an output file path")
+			}
 			color, err := colorEnabled(stdout, colorMode)
 			if err != nil {
 				return err
@@ -128,6 +132,13 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 			}
 			report.File = args[0]
 			applyExpiryStatus(report, time.Now(), expiryDays)
+			if cmd.Flags().Changed("pdf") {
+				if err := writeInspectionPDF(pdfPath, report); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(stdout, "PDF report written to %s\n", pdfPath)
+				return err
+			}
 			if asJSON {
 				encoder := json.NewEncoder(stdout)
 				encoder.SetIndent("", "  ")
@@ -143,6 +154,8 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("pass-env", "pass-file")
 	cmd.MarkFlagsMutuallyExclusive("key-pass-env", "key-pass-file")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print structured JSON containing metadata only")
+	cmd.Flags().StringVar(&pdfPath, "pdf", "", "Write a colored PDF report to a new file instead of printing metadata")
+	cmd.MarkFlagsMutuallyExclusive("json", "pdf")
 	cmd.Flags().StringVar(&colorMode, "color", "auto", "ANSI colors: auto, always or never (JSON is always plain)")
 	cmd.Flags().IntVar(&expiryDays, "expiry-warning-days", 30, "Warn when certificates expire within this many days; 0 disables the warning")
 	return cmd
