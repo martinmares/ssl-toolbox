@@ -19,6 +19,7 @@ go build -o ssl-toolbox .
 ./ssl-toolbox configmap set-binary --help
 ./ssl-toolbox configmap extract-binary --help
 ./ssl-toolbox inspect --help
+./ssl-toolbox extract --help
 ```
 
 | Příkaz | Účel |
@@ -27,6 +28,7 @@ go build -o ssl-toolbox .
 | `truststore` | Vytvoření čistého PFX/JKS truststore z CA PEM souborů |
 | `configmap set-binary` | Nahrazení položky `binaryData` obsahem souboru zakódovaným do base64 |
 | `inspect` | Rozpoznání formátu podle obsahu a výpis všech certifikátů a klíčů; také JSON |
+| `extract` | Export klíče, certifikátu a dostupného CA řetězce z PFX do PEM souborů |
 | `configmap extract-binary` | Obnova přesných binárních bajtů z klíče `binaryData` do nového souboru |
 | `examples` | Přehled variant příkazů s vysvětlením a barevnými ukázkami |
 | `version` | Verze a metadata sestavení; krátký výpis také přes `--version` |
@@ -249,6 +251,7 @@ Každý zdroj hesla má variantu ENV i FILE:
 | `convert` / `truststore`, nové heslo | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, úložiště / šifrovaný PEM nebo DER | `--pass-env` | `--pass-file` |
 | `inspect`, samostatné heslo JKS klíče | `--key-pass-env` | `--key-pass-file` |
+| `extract`, vstupní PFX | `--pass-env` | `--pass-file` |
 
 ENV a FILE pro stejné heslo se nesmějí kombinovat. Pro různá hesla je můžeš
 libovolně míchat. ENV čte hodnotu přesně; FILE odstraní jeden koncový LF nebo
@@ -348,6 +351,53 @@ ssl-toolbox configmap set-binary \
 Po kontrole cíle odstraň poslední `--dry-run`. Před pozdější opakovanou úpravou
 nejprve sám přesuň nebo odstraň předchozí `.bak`, případně použij `--out`.
 
+## Extrakce certifikátu a privátního klíče z PFX
+
+```sh
+ssl-toolbox extract client.pfx --out-dir ./export
+ssl-toolbox extract client.pfx --out-dir ./export --pass-env STORE_PASSWORD
+ssl-toolbox extract client.pfx --out-dir ./export --pass-file "$STORE_PASSWORD_FILE"
+```
+
+Jde o alternativní způsoby spuštění; vyber jeden zdroj hesla a výstupní adresář,
+ve kterém cílové soubory ještě neexistují.
+
+Vznikne `client.key` (nešifrovaný PKCS#8 PEM), `client.pem` (odpovídající
+certifikát) a případně `client.chain.pem` s dostupným CA řetězcem. Názvy vycházejí
+ze vstupního souboru bez poslední přípony. Výstup je čistý PEM bez metadat
+OpenSSL. Soubory mají oprávnění `0600`, nové adresáře `0700`. Existující soubory
+ani symlinky se nepřepisují; před zápisem se zkontrolují všechny cíle.
+Exportovaný klíč není chráněn heslem. Původní PFX zůstane beze změny.
+
+Nejprve se zkouší prázdné heslo PFX, jinak se nástroj zeptá. Přepínače
+`--pass-env` a `--pass-file` fungují stejně jako u `inspect` a navzájem se
+vylučují. Podporované šifrování PFX a BER odpovídá příkazu `inspect`.
+Hesla ani obsah klíče se nevypisují.
+
+Při více klíčích nejprve spusť `inspect` a vyber klíč pomocí `--entry entry-N`.
+Pokud mu odpovídá více různých certifikátů, vyber také `--cert-entry entry-N`.
+ID pocházejí z téhož nezměněného PFX. Při více klíčích se žádná identita
+nevybírá automaticky.
+
+```sh
+ssl-toolbox inspect identities.pfx
+ssl-toolbox extract identities.pfx --out-dir ./export --entry entry-3
+```
+
+Pokud je potřeba vybrat také certifikát, použij místo extrakce výše následující
+variantu. Obě ID nahraď ID privátního klíče a odpovídajícího certifikátu
+z výpisu `inspect`:
+
+```sh
+ssl-toolbox extract identities.pfx --out-dir ./export --entry entry-3 --cert-entry entry-2
+```
+
+CA řetězec obsahuje jen dostupné vydavatele vybraného certifikátu, od nejbližšího
+po kořenový certifikát, pokud je přítomen. Nesouvisející certifikáty se vynechají.
+Kontrolují se jména vydavatelů a podpisy; nejednoznačný řetězec nebo cyklus je
+chyba. Chybějící certifikáty se nestahují. Extrakce neověřuje platnost podle
+data, důvěryhodnost ani revokaci.
+
 ## Inspekce úložišť, certifikátů a klíčů
 
 ```sh
@@ -382,7 +432,9 @@ je chyba. `--json` mění výstup na strukturovaná metadata; dotazy zůstávaj�
 na stderr. Inspekce kontroluje integritu PFX/JKS, pokud je přítomná.
 Nepodporovaný PFX bag se označí jeho OID; nepodporovaný PEM blok,
 neplatná položka nebo chyba dešifrování ukončí příkaz bez částečného výpisu.
-PEM očekává bloky oddělené bílými znaky, nikoli textový dump OpenSSL.
+PEM přijímá bílé znaky a metadata exportů OpenSSL (`Bag Attributes`,
+`Key Attributes`, `subject=`, `issuer=`) před bloky i mezi nimi.
+Jiný text mimo PEM bloky se odmítá.
 
 ### Barvy a expirace
 
@@ -461,7 +513,11 @@ base64, režimy create/dry-run/out, ochranu zálohy a oprávnění. Testy katalo
 ověřují ANSI režimy a chyby výstupu. Platnost certifikátů a oprávnění ke Kafce
 se převodem nemění; výsledek ověř ve skutečném klientském prostředí.
 
-Testy nových příkazů ověřují více identit v PFX/JKS, samostatná hesla JKS klíčů, PEM/DER, šifrovaný PKCS#8, metadata JSON bez privátního materiálu a přesnou extrakci binárních bajtů bez změny manifestu.
+Testy nových příkazů ověřují více identit v PFX/JKS, samostatná hesla JKS klíčů,
+PEM/DER, metadata OpenSSL v PEM, šifrovaný PKCS#8, metadata JSON bez privátního
+materiálu a přesnou extrakci binárních bajtů bez změny manifestu. Testy extrakce
+PFX kontrolují obsah klíče a certifikátu, pořadí a nejednoznačnost CA řetězce,
+výběr identity, zdroje hesel, oprávnění a odmítnutí přepsání výstupů.
 
 ## Licence a správa projektu
 

@@ -188,6 +188,62 @@ func mustECKey(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	return der
 }
 
+func TestInspectOpenSSLPEMMetadata(t *testing.T) {
+	key, cert, ca := fixture(t)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	metadata := "Bag Attributes\n    localKeyID: 01 02 03\n    friendlyName: test certificate\nsubject=CN=test\nissuer=CN=test CA\n"
+	bundle := metadata + string(certPEM) + "Bag Attributes: <No Attributes>\nsubject=CN=test CA\nissuer=CN=test CA\n" + string(caPEM) +
+		"Bag Attributes\n    friendlyName: test key\nKey Attributes\n    X509v3 Key Usage: 10\n" + string(keyPEM)
+	for name, data := range map[string]string{
+		"certificate":   metadata + string(certPEM),
+		"bundle":        bundle,
+		"CRLF":          strings.ReplaceAll(bundle, "\n", "\r\n"),
+		"BOM":           "\xef\xbb\xbf\n  \n" + bundle,
+		"no attributes": "Bag Attributes: <No Attributes>\nKey Attributes: <No Attributes>\n" + string(keyPEM),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := inspectTestData(t, []byte(data), "", "")
+			if r.Format != "PEM" {
+				t.Fatalf("wrong format: %s", r.Format)
+			}
+			switch name {
+			case "certificate":
+				if r.CertificateCount != 1 || r.Entries[0].Certificate.Subject != cert.Subject.String() {
+					t.Fatal("missing certificate")
+				}
+			case "no attributes":
+				if r.PrivateKeyCount != 1 {
+					t.Fatal("missing private key")
+				}
+			default:
+				if r.CertificateCount != 2 || r.PrivateKeyCount != 1 || r.EntryCount != 3 || len(r.Entries[2].Matches) != 1 {
+					t.Fatalf("missing bundle entries or key match: %+v", r)
+				}
+			}
+		})
+	}
+	for name, data := range map[string]string{
+		"metadata only":               metadata,
+		"unknown preamble":            "garbage\n" + string(certPEM),
+		"unknown metadata":            "Bag Attributes\n    garbage\n" + string(certPEM),
+		"unknown text between blocks": metadata + string(certPEM) + "garbage\n" + string(caPEM),
+		"malformed block":             metadata + string(certPEM[:len(certPEM)-20]),
+		"malformed later block":       metadata + string(certPEM) + metadata + string(caPEM[:len(caPEM)-20]),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := inspectContents([]byte(data), &inspectPassword{}, &inspectPassword{}); err == nil {
+				t.Fatal("accepted incomplete or unsupported content")
+			}
+		})
+	}
+}
+
 func TestInspectEncryptedPKCS8Interoperability(t *testing.T) {
 	openssl, err := exec.LookPath("openssl")
 	if err != nil {

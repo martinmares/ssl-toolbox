@@ -151,13 +151,14 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 func inspectContents(data []byte, pass, keyPass *inspectPassword) (*inspectionReport, error) {
 	report := &inspectionReport{Integrity: "not applicable", Entries: []inspectionEntry{}}
 	trimmed := bytes.TrimSpace(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
+	pemData := skipPEMMetadata(trimmed)
 	switch {
 	case bytes.HasPrefix(data, []byte{0xfe, 0xed, 0xfe, 0xed}):
 		report.Format = "JKS"
 		if err := inspectJKS(data, report, pass, keyPass); err != nil {
 			return nil, err
 		}
-	case bytes.HasPrefix(trimmed, []byte("-----BEGIN ")):
+	case bytes.HasPrefix(pemData, []byte("-----BEGIN ")):
 		report.Format = "PEM"
 		if err := inspectPEM(trimmed, report, pass); err != nil {
 			return nil, err
@@ -344,9 +345,36 @@ func inspectJKS(data []byte, report *inspectionReport, pass, keyPass *inspectPas
 	return nil
 }
 
+// OpenSSL PKCS#12 exports include bag/key attributes and subject/issuer lines
+// before PEM blocks. Skip only this metadata so unrelated text is still rejected.
+func skipPEMMetadata(data []byte) []byte {
+	inAttributes := false
+	for len(data) > 0 {
+		line, rest, _ := bytes.Cut(data, []byte("\n"))
+		text := strings.TrimSpace(string(line))
+		switch {
+		case text == "":
+		case text == "Bag Attributes", text == "Key Attributes":
+			inAttributes = true
+		case text == "Bag Attributes: <No Attributes>", text == "Key Attributes: <No Attributes>":
+			inAttributes = false
+		case strings.HasPrefix(text, "subject="), strings.HasPrefix(text, "issuer="):
+			inAttributes = false
+		case inAttributes && len(line) > 0 && (line[0] == ' ' || line[0] == '\t') && strings.Contains(text, ":"):
+		default:
+			return bytes.TrimSpace(data)
+		}
+		data = rest
+	}
+	return data
+}
+
 func inspectPEM(data []byte, report *inspectionReport, pass *inspectPassword) error {
 	for len(bytes.TrimSpace(data)) > 0 {
-		data = bytes.TrimSpace(data)
+		data = skipPEMMetadata(data)
+		if len(data) == 0 {
+			break
+		}
 		if !bytes.HasPrefix(data, []byte("-----BEGIN ")) {
 			return errors.New("unexpected text outside PEM blocks")
 		}

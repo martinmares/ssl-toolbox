@@ -19,6 +19,7 @@ go build -o ssl-toolbox .
 ./ssl-toolbox configmap set-binary --help
 ./ssl-toolbox configmap extract-binary --help
 ./ssl-toolbox inspect --help
+./ssl-toolbox extract --help
 ```
 
 | Command | Purpose |
@@ -27,6 +28,7 @@ go build -o ssl-toolbox .
 | `truststore` | Create a certificate-only PFX/JKS truststore from CA PEM files |
 | `configmap set-binary` | Replace a ConfigMap `binaryData` value with a file's base64-encoded raw bytes |
 | `inspect` | Detect the format by content and inspect every certificate and key; optional JSON |
+| `extract` | Export a PFX identity as a PEM key, certificate and available CA chain |
 | `configmap extract-binary` | Recover the exact binary bytes of a `binaryData` key into a new file |
 | `examples` | Print explained command variants and sample YAML, with terminal colors |
 | `version` | Version and build metadata; short output is also available through `--version` |
@@ -250,6 +252,7 @@ Every password source supports ENV and FILE:
 | `convert` / `truststore`, new password | `--out-pass-env` | `--out-pass-file` |
 | `inspect`, store / encrypted PEM or DER | `--pass-env` | `--pass-file` |
 | `inspect`, separate JKS key password | `--key-pass-env` | `--key-pass-file` |
+| `extract`, input PFX | `--pass-env` | `--pass-file` |
 
 ENV and FILE are mutually exclusive for the same password; sources for different
 passwords may be mixed. ENV values are read exactly. FILE removes one trailing
@@ -349,6 +352,54 @@ ssl-toolbox configmap set-binary \
 Remove the final `--dry-run` after reviewing the target. To update the file
 again later, first move or remove the previous `.bak` yourself, or use `--out`.
 
+## Extract a PFX certificate and private key
+
+```sh
+ssl-toolbox extract client.pfx --out-dir ./export
+ssl-toolbox extract client.pfx --out-dir ./export --pass-env STORE_PASSWORD
+ssl-toolbox extract client.pfx --out-dir ./export --pass-file "$STORE_PASSWORD_FILE"
+```
+
+These are alternative invocations; choose one password source and an output
+directory where the destination files do not yet exist.
+
+Creates `client.key` (unencrypted PKCS#8 PEM), `client.pem` (the matching
+certificate), and `client.chain.pem` if CA issuers are present. Names come from
+the input filename without its final extension. Output is clean PEM without
+OpenSSL bag metadata. All files have permissions `0600`; missing output
+directories are created with `0700`. Existing files, including symlinks, are
+never overwritten, and all destinations are checked before any file is written.
+The private key is exported without password protection; the PFX is unchanged.
+
+An empty PFX password is tried first, then a password is requested if necessary.
+`--pass-env` and `--pass-file` work like their `inspect` equivalents and are
+mutually exclusive. Supports the same PFX encryption and BER encodings as
+`inspect`; private key bytes and passwords are never printed.
+
+For multiple private keys, first run `inspect` and select a key using
+`--entry entry-N`. If several different certificates match its public key,
+also specify `--cert-entry entry-N`. IDs refer to entries in the unchanged
+input PFX. No identity is selected implicitly when multiple keys are present.
+
+```sh
+ssl-toolbox inspect identities.pfx
+ssl-toolbox extract identities.pfx --out-dir ./export --entry entry-3
+```
+
+If certificate selection is also needed, use this instead of the extraction
+above. Replace both IDs with the private key and matching certificate IDs
+shown by `inspect`:
+
+```sh
+ssl-toolbox extract identities.pfx --out-dir ./export --entry entry-3 --cert-entry entry-2
+```
+
+The chain contains only available issuers for the selected certificate, ordered
+from its immediate issuer toward the root (including the root when present).
+Unrelated certificates are excluded. Issuer names and signatures are checked;
+ambiguous chains and cycles are rejected. No missing CA certificates are
+downloaded, and extraction does not validate dates, trust or revocation.
+
 ## Inspect stores, certificates and keys
 
 ```sh
@@ -382,8 +433,9 @@ a separate JKS key password. Missing variables and incorrect supplied passwords
 are errors. `--json` prints structured metadata; prompts remain on stderr.
 PFX/JKS integrity is checked when present. Unsupported PFX bags are identified
 by OID. Unsupported PEM blocks, malformed objects or decryption errors fail
-without a partial report. PEM expects blocks separated by whitespace, rather
-than an OpenSSL text dump.
+without a partial report. PEM accepts whitespace and OpenSSL export metadata
+(`Bag Attributes`, `Key Attributes`, `subject=`, `issuer=`) before and between
+blocks. Other text outside PEM blocks is rejected.
 
 ### Colors and expiration
 
@@ -464,7 +516,11 @@ base64, create/dry-run/output modes, backup refusal and permissions. Example
 output tests cover ANSI modes and output errors. The keystore's validity and
 Kafka permissions do not change; test the result in your actual client runtime.
 
-Tests for the new commands cover multiple PFX/JKS identities, separate JKS key passwords, PEM/DER, encrypted PKCS#8, metadata-only JSON and exact binary extraction without changing the manifest.
+Tests for the new commands cover multiple PFX/JKS identities, separate JKS key
+passwords, PEM/DER, OpenSSL PEM metadata, encrypted PKCS#8, metadata-only JSON
+and exact binary extraction without changing the manifest. PFX extraction tests
+check key/certificate contents, CA chain ordering and ambiguity, identity
+selection, password sources, permissions and refusal to overwrite outputs.
 
 ## License and project governance
 

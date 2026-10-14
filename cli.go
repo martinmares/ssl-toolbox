@@ -14,7 +14,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.SetVersionTemplate("ssl-toolbox version {{.Version}}\n")
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(newStoreCommand(false, stdout, stderr), newStoreCommand(true, stdout, stderr), newConfigMapCommand(stdout), newExamplesCommand(), newVersionCommand(), newInspectCommand(stdout, stderr))
+	root.AddCommand(newStoreCommand(false, stdout, stderr), newStoreCommand(true, stdout, stderr), newConfigMapCommand(stdout), newExamplesCommand(), newVersionCommand(), newInspectCommand(stdout, stderr), newExtractCommand(stdout, stderr))
 	return root
 }
 
